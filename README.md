@@ -1,5 +1,10 @@
 # ShortCuts
-Shortcuts manager and overlay for FreeCAD
+Shortcuts manager and overlay for FreeCAD.
+This fork tries to improve the existing AddOn.
+- replace the dropdown for workbench selection by a list of workbenches
+- allow to show just assigned shortcuts in the list and not all (mostly empty items)
+- add a keyboard-view as alternative to the list view.
+- add a shortcut-trainer that somehow helps users to learn shortcuts easily.
 
 ### Installation:
 

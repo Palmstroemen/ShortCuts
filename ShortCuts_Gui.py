@@ -20,8 +20,7 @@
 
 
 import os
-from PySide import QtGui
-from PySide import QtCore
+from PySide import QtWidgets, QtGui, QtCore
 import FreeCADGui as Gui
 import FreeCAD as App
 
@@ -35,6 +34,7 @@ mw = Gui.getMainWindow()
 verify = QtGui.QAction(mw)
 p = App.ParamGet("User parameter:BaseApp/ShortCutsDev")
 path = os.path.dirname(__file__) + "/Resources/icons/"
+__showAll__ = False
 
 
 def wbIcon(i):
@@ -148,7 +148,7 @@ def printShortcuts():
                                      "\n")
 
 
-def updateDict(source, wb, d):
+def updateDict(source, wb, userLG):
     """Update dictionary."""
     if not hasGroup(source, wb):
         return False
@@ -163,7 +163,7 @@ def updateDict(source, wb, d):
         except AttributeError:
             shortcut = g.GetString("shortcut")
         if command and shortcut:
-            d[command] = shortcut
+            userLG[command] = shortcut
             if command not in scheme:
                 scheme[command] = shortcut
     return True
@@ -190,35 +190,38 @@ def onWorkbench():
     update(workbench)
 
 
-def comboBox():
+def wbSelectorWidget():
     """Workbench selector combo box."""
-    cBox = QtGui.QComboBox()
-    cBox.setMinimumWidth(220)
+    wbSelector = QtGui.QListWidget()
+    wbSelector.setMinimumWidth(220)
 
     listWB = Gui.listWorkbenches()
     listWBSorted = sorted(listWB)
     listWBSorted.reverse()
 
+    icon = QtGui.QIcon(":/icons/freecad")
+    item = QtGui.QListWidgetItem(icon, "Global shortcuts", wbSelector)
+    item.setData(QtCore.Qt.UserRole, "GlobalShortcuts")
+    wbSelector.addItem(item)
     for i in listWBSorted:
         try:
             icon = wbIcon(Gui.listWorkbenches()[i].Icon)
         except AttributeError:
             icon = QtGui.QIcon(":/icons/freecad")
-        cBox.insertItem(0,
-                        icon,
-                        listWB[i].MenuText,
-                        listWB[i].__class__.__name__)
+        item = QtGui.QListWidgetItem(icon, listWB[i].MenuText, wbSelector)
+        item.setData(QtCore.Qt.UserRole, listWB[i].__class__.__name__)
+        wbSelector.addItem(item)
 
-    cBox.insertSeparator(0)
-    icon = QtGui.QIcon(":/icons/freecad")
-    cBox.insertItem(0, icon, "Global shortcuts", "GlobalShortcuts")
-    cBox.setCurrentIndex(0)
+    wbSelector.setCurrentRow(0)
 
     activeWB = Gui.activeWorkbench().__class__.__name__
-    for count in range(cBox.count()):
-        if cBox.itemData(count) == activeWB:
-            cBox.setCurrentIndex(count)
-    return cBox
+    for count in range(wbSelector.count()):
+        item = wbSelector.item(count)
+        if item is not None:
+            item_data = item.data(QtCore.Qt.UserRole)
+            if item_data == activeWB:
+                wbSelector.setCurrentRow(count)
+    return wbSelector
 
 
 def searchLine(table):
@@ -240,58 +243,89 @@ def searchLine(table):
     return search
 
 
+
 def tableWidget():
     """Table for commands and shortcuts."""
     table = QtGui.QTableWidget(0, 2)
     table.verticalHeader().setVisible(False)
-    table.setHorizontalHeaderLabels(["Command", "Shortcut"])
+    table.setHorizontalHeaderLabels(["Shortcut", "Command"])
+    table.setFixedWidth(300)
+    table.setColumnWidth(0, 100)
+    
     # Qt4/Qt5
     try:
-        table.horizontalHeader().setResizeMode(QtGui.QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(0, QtGui.QHeaderView.Fixed)
+        table.horizontalHeader().setSectionResizeMode(1, QtGui.QHeaderView.Stretch)
     except AttributeError:
-        table.horizontalHeader().setSectionResizeMode(QtGui.
-                                                      QHeaderView.
-                                                      Stretch)
+        table.horizontalHeader().setResizeMode(0, QtGui.QHeaderView.Fixed)
+        table.horizontalHeader().setResizeMode(1, QtGui.QHeaderView.Stretch)
+    table.setColumnWidth(0, 100)  # Set the desired width for the first column
     return table
 
-
-def updateTable(cBox, table):
+def updateTable(wbSelector, table):
     """Update table widget items."""
-    workbench = cBox.itemData(cBox.currentIndex())
+    #workbench = wbSelector.itemData(wbSelector.currentIndex())
+    wb = wbSelector.selectedItems()
+    wb = wb[0]
+    workbench = wb.data(QtCore.Qt.UserRole)
+
     update(workbench)
-    names = []
+
+    # build shortcuts list
+    actionList = []
+    row = 0
     for i in actions:
         text = actions[i].text()
         text = text.replace("&", "")
-        names.append([text, actions[i].objectName()])
-    names = sorted(names)
+        shortcut = actions[i].shortcut().toString()
+        if shortcut:
+            row += 1
+        actionList.append([text, actions[i].objectName(), shortcut])
+    App.tableNames = actionList
+
+    if __showAll__: # sort by action
+        actionList = sorted(actionList)
+        row   = len(actions)
+    else: # sort by shortcut (the third element of triple in action list)
+        actionList = sorted(actionList,key=lambda x: x[2])
     sort = []
-    for i in names:
+    for i in actionList:
         sort.append(i[1])
+
     table.blockSignals(True)
     table.clearContents()
-    table.setRowCount(len(actions))
+    table.setRowCount(row)
+
+    # build the table
     row = 0
+    iconNr = 0
     for i in sort:
-        command = QtGui.QTableWidgetItem()
-        text = actions[i].text()
-        text = text.replace("&", "")
-        command.setText(text)
-        command.setToolTip(actions[i].toolTip())
-        command.setFlags(QtCore.Qt.ItemIsEnabled)
-        if actions[i].icon():
-            command.setIcon(actions[i].icon())
-        else:
-            command.setIcon(QtGui.QIcon(":/icons/freecad"))
+        showLine = True
         shortcut = QtGui.QTableWidgetItem()
         text = actions[i].shortcut().toString()
         if text:
             shortcut.setText(text)
             shortcut.setIcon(QtGui.QIcon(itemIcon(i)))
-        shortcut.setData(32, i)
-        table.setItem(row, 0, command)
-        table.setItem(row, 1, shortcut)
-        row += 1
+        elif not __showAll__:
+            showLine = False
+
+        if showLine:
+            shortcut.setData(32, i)
+
+            command = QtGui.QTableWidgetItem()
+            text = actions[i].text()
+            text = text.replace("&", "")
+            command.setText(text)
+            command.setToolTip(actions[i].toolTip())
+            command.setFlags(QtCore.Qt.ItemIsEnabled)
+            if actions[i].icon():
+                command.setIcon(actions[i].icon())
+            else:
+                command.setIcon(QtGui.QIcon(":/icons/freecad"))
+
+            table.setItem(row, 0, shortcut)
+            table.setItem(row, 1, command)
+            row += 1
     table.blockSignals(False)
 
 
@@ -339,6 +373,7 @@ def database(source=None, workbench=None, commands=None):
     if not splitIndex(source, workbench):
         p.GetGroup(source).RemGroup(workbench)
 
+import Keyboard_Layout as kb
 
 def preferences():
     """ShortCuts preferences dialog."""
@@ -354,8 +389,8 @@ def preferences():
     # Dialog
     dia = QtGui.QDialog(mw)
     dia.setModal(True)
-    dia.resize(900, 500)
-    dia.setWindowTitle("Shortcuts preferences")
+    dia.resize(1100, 600)
+    dia.setWindowTitle("Shortcuts")
     dia.finished.connect(onFinished)
     layout = QtGui.QVBoxLayout()
     dia.setLayout(layout)
@@ -375,8 +410,10 @@ def preferences():
     loBtn.addStretch()
     loBtn.addWidget(btnClose)
 
-    # Combo
-    cBox = comboBox()
+    # wbSelector
+    wbSelector = wbSelectorWidget()
+    wbSelector.setWindowTitle("select workbench")
+    wbSelector.setFixedWidth(200)
 
     # Table widget
     table = tableWidget()
@@ -387,7 +424,7 @@ def preferences():
     # Functions and connections
     def onItemChanged(item):
         """Save shortcut."""
-        workbench = cBox.itemData(cBox.currentIndex())
+        workbench = wbSelector.itemData(wbSelector.currentIndex())
         command = item.data(32)
         shortcut = item.text()
         verify.setShortcut(QtGui.QKeySequence(shortcut))
@@ -412,27 +449,50 @@ def preferences():
 
     table.itemChanged.connect(onItemChanged)
 
-    def onCurrentIndexChanged():
+    def onCurrentWBchanged():
         """Activate workbench on selection."""
-        workbench = cBox.itemData(cBox.currentIndex())
-        wbList = Gui.listWorkbenches()
-        for i in wbList:
-            if wbList[i].__class__.__name__ == workbench:
-                Gui.activateWorkbench(workbench)
-        updateTable(cBox, table)
+        selected_items = wbSelector.selectedItems()
+        if selected_items:
+            selected_item = selected_items[0]
+            wb = selected_item.data(QtCore.Qt.UserRole)
+            try:
+                Gui.activateWorkbench(wb)
+            except:
+                a = 2 # dummy reaction.
+        updateTable(wbSelector, table)
 
-    cBox.currentIndexChanged.connect(onCurrentIndexChanged)
+    def on_header_click(logical_index):
+        header = table.horizontalHeaderItem(logical_index).text()
+        print("Clicked on", header)
+        global __showAll__
+        if header == "Shortcut":
+            __showAll__ = False
+        else:
+            __showAll__ = True
+        updateTable(wbSelector, table)
 
-    updateTable(cBox, table)
+    table.horizontalHeader().sectionClicked.connect(on_header_click)
+    wbSelector.itemSelectionChanged.connect(onCurrentWBchanged)
+
+    updateTable(wbSelector, table)
 
     # Layout
+    loRight = QtGui.QVBoxLayout()
+    loRight.addWidget(search)
+    loRight.addWidget(table)
+    loRight.insertLayout(2, loBtn)
+
+    loMid = QtGui.QVBoxLayout()
+    keyboard = kb.KeyboardLayout()
+    loMid.addWidget(keyboard)
+    loMid.addStretch()
+
     loTop = QtGui.QHBoxLayout()
-    loTop.addWidget(cBox)
-    loTop.addWidget(search)
+    loTop.addWidget(wbSelector)
+    loTop.insertLayout(1,loMid)
+    loTop.insertLayout(2,loRight)
 
     layout.insertLayout(0, loTop)
-    layout.addWidget(table)
-    layout.insertLayout(2, loBtn)
 
     btnClose.setDefault(True)
     btnClose.setFocus()
@@ -449,12 +509,12 @@ def onPreferences():
 def accessoriesMenu():
     """Add ShortCuts preferences to accessories menu."""
     pref = QtGui.QAction(mw)
-    pref.setText("Shortcuts")
-    pref.setObjectName("ShortCuts")
+    pref.setText("ShortcutsDeveloper")
+    pref.setObjectName("ShortCutsDeveloper")
     pref.triggered.connect(onPreferences)
     try:
         import AccessoriesMenu
-        AccessoriesMenu.addItem("ShortCuts")
+        AccessoriesMenu.addItem("ShortCutsDeveloper")
     except ImportError:
         a = mw.findChild(QtGui.QAction, "AccessoriesMenu")
         if a:
