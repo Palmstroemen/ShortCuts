@@ -186,9 +186,17 @@ def _label_for_keycode(lib, state, keycode):
     return ""
 
 
-def _detect_linux():
-    """Return (labels_by_cell, meta) using libxkbcommon. Raises on failure."""
+def _detect_linux(force_layout=None, force_variant=None):
+    """Return (labels_by_cell, meta) using libxkbcommon. Raises on failure.
+
+    force_layout/force_variant override the active layout, so the view can be
+    generated for any installed XKB layout regardless of what is active (for
+    remote sessions or exotic hardware where detection picked the wrong one).
+    """
     rmlvo = _query_rmlvo()
+    if force_layout is not None:
+        rmlvo["layout"] = force_layout
+        rmlvo["variant"] = force_variant or ""
     lib = _load_xkbcommon()
 
     ctx = lib.xkb_context_new(0)
@@ -230,20 +238,22 @@ def _detect_linux():
         "layout": rmlvo.get("layout", "?"),
         "variant": rmlvo.get("variant", ""),
         "physical_form": "ISO" if iso else "ANSI",
+        "forced": force_layout is not None,
     }
     return labels, meta
 
 
-def _detect_windows():
+def _detect_windows(force_layout=None, force_variant=None):
     """Scaffold: ToUnicodeEx(MapVirtualKeyEx(scancode, MAPVK_VSC_TO_VK, hkl)).
 
     TODO: full implementation. XKB_KEYCODES would be replaced by a
-    scancode->cell table; VK_OEM_102 governs ISO vs ANSI.
+    scancode->cell table; VK_OEM_102 governs ISO vs ANSI. Forcing a specific
+    layout would load the matching HKL.
     """
     raise NotImplementedError("Windows detection not yet implemented")
 
 
-def _detect_macos():
+def _detect_macos(force_layout=None, force_variant=None):
     """Scaffold: UCKeyTranslate() with TISCopyCurrentKeyboardInputSource().
 
     TODO: full implementation via Carbon/HIToolbox through ctypes.
@@ -251,31 +261,32 @@ def _detect_macos():
     raise NotImplementedError("macOS detection not yet implemented")
 
 
-def detect_labels_by_cell():
+def detect_labels_by_cell(force_layout=None, force_variant=None):
     """OS-detected labels keyed by (row, col). Raises on unsupported/failure."""
     system = platform.system()
     if system == "Linux":
-        return _detect_linux()
+        return _detect_linux(force_layout, force_variant)
     if system == "Windows":
-        return _detect_windows()
+        return _detect_windows(force_layout, force_variant)
     if system == "Darwin":
-        return _detect_macos()
+        return _detect_macos(force_layout, force_variant)
     raise RuntimeError("unsupported platform: %s" % system)
 
 
-def detect_layout(manual_override=None):
+def detect_layout(manual_override=None, layout=None, variant=None):
     """Return (key_labels, meta).
 
     key_labels is a list-of-lists in the same shape the widget draws. Dynamic
     cells are filled from the OS; static cells come from GRID_TEMPLATE. On any
     failure the German QWERTZ fallback is returned and meta['source'] says so.
 
-    manual_override: optional dict {(row, col): "label"} to force specific caps
-    (for remote/X-forwarding sessions, exotic hardware, or multiple layouts).
+    layout/variant: force a specific XKB layout instead of the active one (the
+    manual-selection path). manual_override: optional dict {(row, col): "label"}
+    to force individual caps.
     """
     try:
-        labels_by_cell, meta = detect_labels_by_cell()
-        meta["source"] = "os"
+        labels_by_cell, meta = detect_labels_by_cell(layout, variant)
+        meta["source"] = "manual" if layout is not None else "os"
     except Exception as exc:
         labels_by_cell = dict(_FALLBACK_LABELS)
         meta = {"source": "fallback", "error": str(exc),
@@ -311,6 +322,54 @@ _FALLBACK_LABELS = {
     (4, 6): "B", (4, 7): "N", (4, 8): "M", (4, 9): ",", (4, 10): ".",
     (4, 11): "-",
 }
+
+
+# Curated common layouts for the manual dropdown (code, variant, display name).
+COMMON_LAYOUTS = [
+    ("us", "", "US (QWERTY)"),
+    ("de", "", "German (QWERTZ)"),
+    ("at", "", "Austrian"),
+    ("ch", "", "Swiss"),
+    ("gb", "", "UK"),
+    ("fr", "", "French (AZERTY)"),
+    ("es", "", "Spanish"),
+    ("it", "", "Italian"),
+    ("us", "dvorak", "US Dvorak"),
+    ("us", "colemak", "US Colemak"),
+]
+
+
+def available_layouts():
+    """Layout choices for the manual dropdown.
+
+    Returns a list of dicts {"layout", "variant", "name"}. The first entry is
+    the automatic one (layout None). Then the layouts actually configured on the
+    system (from setxkbmap), then the curated common set, de-duplicated.
+    """
+    choices = [{"layout": None, "variant": "", "name": "Automatic (detected)"}]
+    seen = set()
+
+    rmlvo = _query_rmlvo() if platform.system() == "Linux" else {}
+    sys_layouts = [x for x in rmlvo.get("layout", "").split(",") if x]
+    sys_variants = rmlvo.get("variant", "").split(",")
+    for i, code in enumerate(sys_layouts):
+        variant = sys_variants[i] if i < len(sys_variants) else ""
+        key = (code, variant)
+        if key in seen:
+            continue
+        seen.add(key)
+        name = code if not variant else "%s (%s)" % (code, variant)
+        choices.append({"layout": code, "variant": variant,
+                        "name": "System: " + name})
+
+    for code, variant, name in COMMON_LAYOUTS:
+        key = (code, variant)
+        if key in seen:
+            continue
+        seen.add(key)
+        choices.append({"layout": code, "variant": variant, "name": name})
+
+    return choices
 
 
 if __name__ == "__main__":
