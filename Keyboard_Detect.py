@@ -10,63 +10,38 @@
 #   Windows:             user32 ToUnicodeEx / MapVirtualKeyEx   (scaffolded)
 #   macOS:               Carbon UCKeyTranslate                  (scaffolded)
 #
-# detect_layout() returns a key_labels grid (same shape the widget draws) with
-# the character-producing cells filled from the OS. Static cells (Esc, Tab,
-# Shift, F-keys, Space, arrows, ...) are passed through unchanged.
+# detect_layout() returns a dict of labels keyed by XKB key name (AD01 = the
+# "Q" position, etc.); the physical templates reference those names, so the
+# character caps follow the active layout regardless of the drawn shape.
 
 import ctypes
 import ctypes.util
 import platform
 import subprocess
 
-# --- The on-screen grid template -------------------------------------------
-# None marks a cell whose label is filled dynamically from the OS; a string is
-# a fixed positional label that never depends on the keyboard layout.
-GRID_TEMPLATE = [
-    ["Esc", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"],
-    [None, None, None, None, None, None, None, None, None, None, None, None, None],
-    ["Tab", None, None, None, None, None, None, None, None, None, None, None, None],
-    ["ShiftLock", None, None, None, None, None, None, None, None, None, None, None, None],
-    ["Shift", None, None, None, None, None, None, None, None, None, None, None, "Shift"],
-    ["Ctrl", "Fn", "Win", "Alt", "Space", "Alt Gr", "WinC", "Ctrl", "LEFT", "UP", "DOWN", "RIGHT"],
-]
-
-# --- Linux: grid cell -> XKB keycode ---------------------------------------
+# --- Linux: XKB key name -> XKB keycode ------------------------------------
 # XKB keycode = Linux evdev keycode + 8. These positions are stable across
-# layouts; only the emitted character changes.
-#   (row_idx, col_idx): xkb_keycode
-XKB_KEYCODES = {
-    # number row
-    (1, 0): 49,  # grave / ^
-    (1, 1): 10, (1, 2): 11, (1, 3): 12, (1, 4): 13, (1, 5): 14, (1, 6): 15,
-    (1, 7): 16, (1, 8): 17, (1, 9): 18, (1, 10): 19,
-    (1, 11): 20,  # minus / ß
-    (1, 12): 21,  # equal / ´
-    # QWERTY/QWERTZ row
-    (2, 1): 24, (2, 2): 25, (2, 3): 26, (2, 4): 27, (2, 5): 28, (2, 6): 29,
-    (2, 7): 30, (2, 8): 31, (2, 9): 32, (2, 10): 33,
-    (2, 11): 34,  # [ / Ü
-    (2, 12): 35,  # ] / *
-    # home row
-    (3, 1): 38, (3, 2): 39, (3, 3): 40, (3, 4): 41, (3, 5): 42, (3, 6): 43,
-    (3, 7): 44, (3, 8): 45, (3, 9): 46,
-    (3, 10): 47,  # ; / Ö
-    (3, 11): 48,  # ' / Ä
-    (3, 12): 51,  # backslash / # '
-    # bottom letter row
-    (4, 1): 94,  # ISO extra key (<>|) - absent on ANSI
-    (4, 2): 52, (4, 3): 53, (4, 4): 54, (4, 5): 55, (4, 6): 56, (4, 7): 57,
-    (4, 8): 58,
-    (4, 9): 59,   # comma
-    (4, 10): 60,  # period
-    (4, 11): 61,  # slash / -
+# layouts; only the emitted character changes. The names are the standard XKB
+# ones (AEnn = number row, ADnn = QWERTY row, ACnn = home row, ABnn = bottom
+# row, TLDE = grave, BKSL = backslash, LSGT = the ISO <>| key).
+KEYCODES = {
+    "TLDE": 49,
+    "AE01": 10, "AE02": 11, "AE03": 12, "AE04": 13, "AE05": 14, "AE06": 15,
+    "AE07": 16, "AE08": 17, "AE09": 18, "AE10": 19, "AE11": 20, "AE12": 21,
+    "AD01": 24, "AD02": 25, "AD03": 26, "AD04": 27, "AD05": 28, "AD06": 29,
+    "AD07": 30, "AD08": 31, "AD09": 32, "AD10": 33, "AD11": 34, "AD12": 35,
+    "AC01": 38, "AC02": 39, "AC03": 40, "AC04": 41, "AC05": 42, "AC06": 43,
+    "AC07": 44, "AC08": 45, "AC09": 46, "AC10": 47, "AC11": 48, "BKSL": 51,
+    "LSGT": 94,
+    "AB01": 52, "AB02": 53, "AB03": 54, "AB04": 55, "AB05": 56, "AB06": 57,
+    "AB07": 58, "AB08": 59, "AB09": 60, "AB10": 61,
 }
 
-# (4,1): the ISO extra key (<>|). Best-effort form hint only: the XKB keymap
-# assigns this keycode a symbol based on the *layout*, not the physical board,
-# so some ANSI layouts (e.g. "us") still report a symbol here. Treat
-# physical_form as a hint; the manual override is the reliable escape hatch.
-ISO_EXTRA_KEYCODE = 94
+# LSGT is the ISO extra key (<>|). Best-effort form hint only: the XKB keymap
+# assigns it a symbol based on the *layout*, not the physical board, so some
+# ANSI layouts (e.g. "us") still report a symbol here. Treat physical_form as a
+# hint; the shape dropdown is the reliable escape hatch.
+ISO_EXTRA_KEY = "LSGT"
 
 # Dead-key keysym names -> the glyph we want to show on the cap.
 _DEAD_KEY_GLYPHS = {
@@ -224,10 +199,10 @@ def _detect_linux(force_layout=None, force_variant=None):
         raise RuntimeError("xkb_state_new failed")
 
     labels = {}
-    for cell, keycode in XKB_KEYCODES.items():
-        labels[cell] = _label_for_keycode(lib, state, keycode)
+    for name, keycode in KEYCODES.items():
+        labels[name] = _label_for_keycode(lib, state, keycode)
 
-    iso = bool(labels.get((4, 1), ""))
+    iso = bool(labels.get(ISO_EXTRA_KEY, ""))
 
     lib.xkb_state_unref(state)
     lib.xkb_keymap_unref(keymap)
@@ -246,8 +221,8 @@ def _detect_linux(force_layout=None, force_variant=None):
 def _detect_windows(force_layout=None, force_variant=None):
     """Scaffold: ToUnicodeEx(MapVirtualKeyEx(scancode, MAPVK_VSC_TO_VK, hkl)).
 
-    TODO: full implementation. XKB_KEYCODES would be replaced by a
-    scancode->cell table; VK_OEM_102 governs ISO vs ANSI. Forcing a specific
+    TODO: full implementation. KEYCODES would be replaced by a
+    name->scancode table; VK_OEM_102 governs ISO vs ANSI. Forcing a specific
     layout would load the matching HKL.
     """
     raise NotImplementedError("Windows detection not yet implemented")
@@ -261,8 +236,8 @@ def _detect_macos(force_layout=None, force_variant=None):
     raise NotImplementedError("macOS detection not yet implemented")
 
 
-def detect_labels_by_cell(force_layout=None, force_variant=None):
-    """OS-detected labels keyed by (row, col). Raises on unsupported/failure."""
+def detect_labels_by_name(force_layout=None, force_variant=None):
+    """OS-detected labels keyed by XKB key name. Raises on unsupported/failure."""
     system = platform.system()
     if system == "Linux":
         return _detect_linux(force_layout, force_variant)
@@ -274,53 +249,45 @@ def detect_labels_by_cell(force_layout=None, force_variant=None):
 
 
 def detect_layout(manual_override=None, layout=None, variant=None):
-    """Return (key_labels, meta).
+    """Return (labels_by_name, meta).
 
-    key_labels is a list-of-lists in the same shape the widget draws. Dynamic
-    cells are filled from the OS; static cells come from GRID_TEMPLATE. On any
-    failure the German QWERTZ fallback is returned and meta['source'] says so.
+    labels_by_name maps each XKB key name (AD01, AC10, ...) to the character the
+    active (or forced) layout produces there; the physical templates look caps
+    up by these names. On any failure the German QWERTZ fallback is returned and
+    meta['source'] says so.
 
     layout/variant: force a specific XKB layout instead of the active one (the
-    manual-selection path). manual_override: optional dict {(row, col): "label"}
-    to force individual caps.
+    manual-selection path). manual_override: optional dict {name: "label"} to
+    force individual caps.
     """
     try:
-        labels_by_cell, meta = detect_labels_by_cell(layout, variant)
+        labels, meta = detect_labels_by_name(layout, variant)
         meta["source"] = "manual" if layout is not None else "os"
     except Exception as exc:
-        labels_by_cell = dict(_FALLBACK_LABELS)
+        labels = dict(_FALLBACK_LABELS)
         meta = {"source": "fallback", "error": str(exc),
                 "physical_form": "ISO", "layout": "de"}
 
     if manual_override:
-        labels_by_cell.update(manual_override)
+        labels.update(manual_override)
 
-    grid = []
-    for r, row in enumerate(GRID_TEMPLATE):
-        out_row = []
-        for c, cell in enumerate(row):
-            if cell is None:
-                out_row.append(labels_by_cell.get((r, c), "") or "?")
-            else:
-                out_row.append(cell)
-        grid.append(out_row)
-    return grid, meta
+    return labels, meta
 
 
 # German QWERTZ fallback (matches the previously hard-coded labels).
 _FALLBACK_LABELS = {
-    (1, 0): "^", (1, 1): "1", (1, 2): "2", (1, 3): "3", (1, 4): "4",
-    (1, 5): "5", (1, 6): "6", (1, 7): "7", (1, 8): "8", (1, 9): "9",
-    (1, 10): "0", (1, 11): "ß", (1, 12): "´",
-    (2, 1): "Q", (2, 2): "W", (2, 3): "E", (2, 4): "R", (2, 5): "T",
-    (2, 6): "Z", (2, 7): "U", (2, 8): "I", (2, 9): "O", (2, 10): "P",
-    (2, 11): "Ü", (2, 12): "*",
-    (3, 1): "A", (3, 2): "S", (3, 3): "D", (3, 4): "F", (3, 5): "G",
-    (3, 6): "H", (3, 7): "J", (3, 8): "K", (3, 9): "L", (3, 10): "Ö",
-    (3, 11): "Ä", (3, 12): "'",
-    (4, 1): "<", (4, 2): "Y", (4, 3): "X", (4, 4): "C", (4, 5): "V",
-    (4, 6): "B", (4, 7): "N", (4, 8): "M", (4, 9): ",", (4, 10): ".",
-    (4, 11): "-",
+    "TLDE": "^", "AE01": "1", "AE02": "2", "AE03": "3", "AE04": "4",
+    "AE05": "5", "AE06": "6", "AE07": "7", "AE08": "8", "AE09": "9",
+    "AE10": "0", "AE11": "ß", "AE12": "´",
+    "AD01": "Q", "AD02": "W", "AD03": "E", "AD04": "R", "AD05": "T",
+    "AD06": "Z", "AD07": "U", "AD08": "I", "AD09": "O", "AD10": "P",
+    "AD11": "Ü", "AD12": "+",
+    "AC01": "A", "AC02": "S", "AC03": "D", "AC04": "F", "AC05": "G",
+    "AC06": "H", "AC07": "J", "AC08": "K", "AC09": "L", "AC10": "Ö",
+    "AC11": "Ä", "BKSL": "#",
+    "LSGT": "<", "AB01": "Y", "AB02": "X", "AB03": "C", "AB04": "V",
+    "AB05": "B", "AB06": "N", "AB07": "M", "AB08": ",", "AB09": ".",
+    "AB10": "-",
 }
 
 
@@ -373,7 +340,7 @@ def available_layouts():
 
 
 if __name__ == "__main__":
-    grid, meta = detect_layout()
+    labels, meta = detect_layout()
     print("meta:", meta)
-    for row in grid:
-        print(" ".join("%-4s" % c for c in row))
+    for name in KEYCODES:
+        print("  %-5s %s" % (name, labels.get(name, "")))
