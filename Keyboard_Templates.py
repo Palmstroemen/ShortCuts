@@ -21,6 +21,16 @@ Y_MOD = 5.25
 
 FUNC_H = 0.8  # function keys are a little shorter
 
+# Horizontal placement of the clusters to the right of the main block (units).
+# Equal gaps on both sides keep the arrow cluster visually separate from the
+# keyboard and the numpad.
+MAIN_RIGHT = 15.0          # right edge of the main block
+CLUSTER_GAP = 0.75
+NAV_X = MAIN_RIGHT + CLUSTER_GAP
+NAV_W = 3
+NAV_H = 0.67               # arrow keys ~2/3 of a normal key (room above them)
+NUMPAD_X = NAV_X + NAV_W + CLUSTER_GAP
+
 
 def C(x, y, key_id, w=1.0, h=1.0):
     """A character key; its cap is filled from the detected layout by key_id."""
@@ -64,15 +74,18 @@ def _modifier_row():
 
 
 def _nav_cluster():
-    # Arrows as the usual inverted T, with Page Up/Down stacked beside them.
-    x0 = 15.5
+    # Compact 3x2 block of half-height keys: Page Up / Up / Page Down over
+    # Left / Down / Right.
+    x0 = NAV_X
+    bottom = Y_MOD + 1.0 - NAV_H       # keep the cluster's foot on the mod row
+    top = bottom - NAV_H
     return [
-        S(x0, Y_MOD, "←", h=1.0),             # Left
-        S(x0 + 1, Y_MOD, "↑", h=0.5),         # Up
-        S(x0 + 1, Y_MOD + 0.5, "↓", h=0.5),   # Down
-        S(x0 + 2, Y_MOD, "→", h=1.0),         # Right
-        S(x0 + 3, Y_MOD, "⇞", h=0.5),         # Page Up
-        S(x0 + 3, Y_MOD + 0.5, "⇟", h=0.5),   # Page Down
+        S(x0, top, "⇞", h=NAV_H),          # Page Up
+        S(x0 + 1, top, "↑", h=NAV_H),      # Up
+        S(x0 + 2, top, "⇟", h=NAV_H),      # Page Down
+        S(x0, bottom, "←", h=NAV_H),       # Left
+        S(x0 + 1, bottom, "↓", h=NAV_H),   # Down
+        S(x0 + 2, bottom, "→", h=NAV_H),   # Right
     ]
 
 
@@ -125,7 +138,7 @@ def _numpad():
     All keys are static: the keypad emits the same digits/operators regardless
     of the character layout.
     """
-    nx = 20.5
+    nx = NUMPAD_X
     return [
         S(nx, Y_NUM, "Num"), S(nx + 1, Y_NUM, "/"),
         S(nx + 2, Y_NUM, "*"), S(nx + 3, Y_NUM, "-"),

@@ -129,3 +129,14 @@ class KeyboardLayout(QtWidgets.QWidget):
             int(round(max_x * CELL - GAP)),
             int(round(max_y * CELL - GAP)),
         )
+
+        # Switching shape changes the board width (e.g. numpad adds a block), so
+        # let the dialog follow: adjustSize() gives the right width, but it also
+        # shrinks the height to the keyboard's - so restore the previous height
+        # and the neighbouring lists keep their size.
+        self.updateGeometry()
+        window = self.window()
+        if window is not None and window is not self:
+            keep_height = window.height()
+            window.adjustSize()
+            window.resize(window.width(), keep_height)
