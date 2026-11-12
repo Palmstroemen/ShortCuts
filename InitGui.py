@@ -236,7 +236,7 @@ def shortCuts():
         """
         currentGlobal.clear()
         index = paramGet.GetGroup("Global shortcuts").GetString("IndexList")
-        index = index.split(",")
+        index = [i for i in index.split(",") if i]
 
         for i in index:
             try:
@@ -284,7 +284,7 @@ def shortCuts():
 
         if activeWB:
             index = paramGet.GetGroup(activeWB).GetString("IndexList")
-            index = index.split(",")
+            index = [i for i in index.split(",") if i]
 
             for i in index:
                 try:
@@ -395,7 +395,7 @@ def shortCuts():
         """
         indexNumber = None
         index = paramGet.GetGroup(activeWB).GetString("IndexList")
-        index = index.split(",")
+        index = [i for i in index.split(",") if i]
 
         for i in index:
             try:
@@ -442,7 +442,7 @@ def shortCuts():
         Delete the command data and corresponding group from the database.
         """
         index = paramGet.GetGroup(activeWB).GetString("IndexList")
-        index = index.split(",")
+        index = [i for i in index.split(",") if i]
 
         for i in index:
             try:
