@@ -16,6 +16,7 @@
 
 import ctypes
 import ctypes.util
+import os
 import platform
 import subprocess
 
@@ -89,6 +90,25 @@ def _query_rmlvo():
     except Exception:
         pass
     return rmlvo
+
+
+def _ensure_xkb_config_root():
+    """Point libxkbcommon at the system XKB data if its default path is invalid.
+
+    A bundled libxkbcommon - e.g. the one inside a FreeCAD AppImage - can carry
+    a compiled-in XKB data path from its build host that does not exist on the
+    user's machine, which makes xkb_context_new fail and detection silently fall
+    back. If XKB_CONFIG_ROOT is unset or points nowhere, aim it at the system
+    data directory. libxkbcommon reads this env var at context creation.
+    """
+    root = os.environ.get("XKB_CONFIG_ROOT")
+    if root and os.path.isdir(root):
+        return
+    for candidate in ("/usr/share/X11/xkb", "/usr/local/share/X11/xkb",
+                      "/etc/X11/xkb", "/usr/X11R6/lib/X11/xkb"):
+        if os.path.isdir(candidate):
+            os.environ["XKB_CONFIG_ROOT"] = candidate
+            return
 
 
 def _load_xkbcommon():
@@ -172,6 +192,7 @@ def _detect_linux(force_layout=None, force_variant=None):
     if force_layout is not None:
         rmlvo["layout"] = force_layout
         rmlvo["variant"] = force_variant or ""
+    _ensure_xkb_config_root()
     lib = _load_xkbcommon()
 
     ctx = lib.xkb_context_new(0)
@@ -207,6 +228,11 @@ def _detect_linux(force_layout=None, force_variant=None):
     lib.xkb_state_unref(state)
     lib.xkb_keymap_unref(keymap)
     lib.xkb_context_unref(ctx)
+
+    # A broken/empty keymap yields no glyphs at all; prefer the fallback over a
+    # keyboard full of blanks.
+    if not any(labels.get(name) for name in KEYCODES):
+        raise RuntimeError("xkb produced no key labels (empty keymap)")
 
     meta = {
         "platform": "linux",
