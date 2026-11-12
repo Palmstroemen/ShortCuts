@@ -103,11 +103,13 @@ def _iso_keys():
     for i in range(12):
         keys.append(C(1.5 + i, Y_QWERTY, "AD%02d" % (i + 1)))
     keys.append(S(13.5, Y_QWERTY, "Enter", w=1.5, h=2.0))
-    # Home row: Caps, 11 keys + the extra BKSL (# key); Enter already placed.
-    keys.append(S(0, Y_HOME, "Caps", w=1.5))
+    # Home row: Caps (wider than Tab, so the row sits slightly right of QWERTY -
+    # the usual keyboard stagger), 11 keys + the extra BKSL (# key, a touch
+    # narrow so the row still meets the Enter); Enter already placed.
+    keys.append(S(0, Y_HOME, "Caps", w=1.75))
     for i in range(11):
-        keys.append(C(1.5 + i, Y_HOME, "AC%02d" % (i + 1)))
-    keys.append(C(12.5, Y_HOME, "BKSL"))
+        keys.append(C(1.75 + i, Y_HOME, "AC%02d" % (i + 1)))
+    keys.append(C(12.75, Y_HOME, "BKSL", w=0.75))
     # Bottom row: short left Shift, the ISO <> key, 10 keys, wide right Shift.
     keys.append(S(0, Y_BOTTOM, "Shift", w=1.25))
     keys.append(C(1.25, Y_BOTTOM, "LSGT"))

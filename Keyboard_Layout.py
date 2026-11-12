@@ -49,6 +49,15 @@ class KeyboardLayout(QtWidgets.QWidget):
         controls.addStretch()
         outer.addLayout(controls)
 
+        # Separate the controls from the keyboard so the combo boxes don't read
+        # as part of it.
+        outer.addSpacing(8)
+        separator = QtWidgets.QFrame()
+        separator.setFrameShape(QtWidgets.QFrame.HLine)
+        separator.setFrameShadow(QtWidgets.QFrame.Sunken)
+        outer.addWidget(separator)
+        outer.addSpacing(8)
+
         # Board: keys are positioned absolutely on this container. Trim the
         # buttons' padding and font so short caps fit the small keys.
         self.board = QtWidgets.QWidget()
