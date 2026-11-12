@@ -1,28 +1,25 @@
-# Show a nice keyboar layout
+# Show a nice keyboard layout, labelled from the active OS keyboard layout.
 
-from PySide2 import QtWidgets, QtGui, QtCore
+from qt_compat import QtWidgets, QtCore
+import Keyboard_Detect
+
 
 class KeyboardLayout(QtWidgets.QWidget):
-    def __init__(self):
+    def __init__(self, manual_override=None):
         super().__init__()
 
         key_1_size = [35, 30, 50, 70, 35, 40]
 
-        # Define key labels for each row
-        key_labels = [
-            ["Esc","F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"],
-            ["^", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "ß", "´"],
-            ["Tab", "Q", "W", "E", "R", "T", "Z", "U", "I", "O", "P", "Ü", "*"],
-            ["ShiftLock", "A", "S", "D", "F", "G", "H", "J", "K", "L", "Ö", "Ä", "'"],
-            ["Shift", "<", "Y", "X", "C", "V", "B", "N", "M", ",", ".", "-", "Shift"],
-            ["Ctrl", "Fn", "Win", "Alt", "Space", "Alt Gr", "WinC", "Ctrl", "LEFT", "UP", "DOWN", "RIGHT"]
-        ]
+        # Key labels detected from the OS keyboard layout (falls back to German
+        # QWERTZ if detection is unavailable). manual_override forces specific
+        # caps for remote sessions / exotic hardware; see Keyboard_Detect.
+        key_labels, self.layout_meta = Keyboard_Detect.detect_layout(manual_override)
 
         layout = QtWidgets.QHBoxLayout()
         self.setLayout(layout)
         key_row = []
         layout.setSpacing(5)
-        self.setGeometry(100,100,800,400)
+        self.setGeometry(100, 100, 800, 400)
 
         # Create and layout keys
         key_all_rows = QtWidgets.QVBoxLayout()
@@ -32,7 +29,7 @@ class KeyboardLayout(QtWidgets.QWidget):
             key_row[row_idx].setAlignment(QtCore.Qt.AlignLeft)  # Set the alignment to left
             # Creat one row after another
             for col_idx, label in enumerate(row):
-                key_button = QtWidgets.QPushButton(label,self)
+                key_button = QtWidgets.QPushButton(label, self)
                 if row_idx == 0: key_height = 30
                 else:            key_height = 40
                 if col_idx == 0: key_button.setFixedSize(key_1_size[row_idx], key_height)  # Set the size based on your preferences
