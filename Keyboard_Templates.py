@@ -119,9 +119,30 @@ def _iso_keys():
     return keys + _modifier_row() + _nav_cluster()
 
 
+def _numpad():
+    """Standard 17-key numeric keypad, placed right of the navigation cluster.
+
+    All keys are static: the keypad emits the same digits/operators regardless
+    of the character layout.
+    """
+    nx = 20.5
+    return [
+        S(nx, Y_NUM, "Num"), S(nx + 1, Y_NUM, "/"),
+        S(nx + 2, Y_NUM, "*"), S(nx + 3, Y_NUM, "-"),
+        S(nx, Y_QWERTY, "7"), S(nx + 1, Y_QWERTY, "8"),
+        S(nx + 2, Y_QWERTY, "9"), S(nx + 3, Y_QWERTY, "+", h=2.0),
+        S(nx, Y_HOME, "4"), S(nx + 1, Y_HOME, "5"), S(nx + 2, Y_HOME, "6"),
+        S(nx, Y_BOTTOM, "1"), S(nx + 1, Y_BOTTOM, "2"),
+        S(nx + 2, Y_BOTTOM, "3"), S(nx + 3, Y_BOTTOM, "Enter", h=2.0),
+        S(nx, Y_MOD, "0", w=2.0), S(nx + 2, Y_MOD, "."),
+    ]
+
+
 TEMPLATES = {
     "ansi": {"name": "ANSI (US-style)", "keys": _ansi_keys()},
+    "ansi_full": {"name": "ANSI + numpad", "keys": _ansi_keys() + _numpad()},
     "iso": {"name": "ISO (EU-style)", "keys": _iso_keys()},
+    "iso_full": {"name": "ISO + numpad", "keys": _iso_keys() + _numpad()},
 }
 
 
@@ -134,5 +155,9 @@ def template_choices():
 
 
 def default_template(meta):
-    """Pick a template id from detection metadata (ISO vs ANSI best-effort)."""
+    """Pick a template id from detection metadata (ISO vs ANSI best-effort).
+
+    Defaults to the tenkeyless form; the numpad variants are opt-in since the
+    presence of a keypad can't be detected.
+    """
     return "ansi" if meta.get("physical_form") == "ANSI" else "iso"
