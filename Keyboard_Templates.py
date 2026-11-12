@@ -45,7 +45,7 @@ def _number_row():
     keys = [C(0, Y_NUM, "TLDE")]
     for i in range(12):
         keys.append(C(1 + i, Y_NUM, "AE%02d" % (i + 1)))
-    keys.append(S(13, Y_NUM, "Backspace", w=2.0))
+    keys.append(S(13, Y_NUM, "⌫", w=2.0))  # Backspace
     return keys
 
 
@@ -56,7 +56,7 @@ def _modifier_row():
         S(1.25, Y_MOD, "Win", w=1.25),
         S(2.50, Y_MOD, "Alt", w=1.25),
         S(3.75, Y_MOD, "Space", w=6.25),
-        S(10.00, Y_MOD, "Alt Gr", w=1.25),
+        S(10.00, Y_MOD, "AltGr", w=1.25),
         S(11.25, Y_MOD, "Win", w=1.25),
         S(12.50, Y_MOD, "Menu", w=1.25),
         S(13.75, Y_MOD, "Ctrl", w=1.25),
@@ -67,12 +67,12 @@ def _nav_cluster():
     # Arrows as the usual inverted T, with Page Up/Down stacked beside them.
     x0 = 15.5
     return [
-        S(x0, Y_MOD, "LEFT", h=1.0),
-        S(x0 + 1, Y_MOD, "UP", h=0.5),
-        S(x0 + 1, Y_MOD + 0.5, "DOWN", h=0.5),
-        S(x0 + 2, Y_MOD, "RIGHT", h=1.0),
-        S(x0 + 3, Y_MOD, "Pg Up", h=0.5),
-        S(x0 + 3, Y_MOD + 0.5, "Pg Dn", h=0.5),
+        S(x0, Y_MOD, "←", h=1.0),             # Left
+        S(x0 + 1, Y_MOD, "↑", h=0.5),         # Up
+        S(x0 + 1, Y_MOD + 0.5, "↓", h=0.5),   # Down
+        S(x0 + 2, Y_MOD, "→", h=1.0),         # Right
+        S(x0 + 3, Y_MOD, "⇞", h=0.5),         # Page Up
+        S(x0 + 3, Y_MOD + 0.5, "⇟", h=0.5),   # Page Down
     ]
 
 
@@ -84,7 +84,7 @@ def _ansi_keys():
         keys.append(C(1.5 + i, Y_QWERTY, "AD%02d" % (i + 1)))
     keys.append(C(13.5, Y_QWERTY, "BKSL", w=1.5))
     # Home row: Caps, 11 keys, wide Enter.
-    keys.append(S(0, Y_HOME, "ShiftLock", w=1.75))
+    keys.append(S(0, Y_HOME, "Caps", w=1.75))
     for i in range(11):
         keys.append(C(1.75 + i, Y_HOME, "AC%02d" % (i + 1)))
     keys.append(S(12.75, Y_HOME, "Enter", w=2.25))
@@ -104,7 +104,7 @@ def _iso_keys():
         keys.append(C(1.5 + i, Y_QWERTY, "AD%02d" % (i + 1)))
     keys.append(S(13.5, Y_QWERTY, "Enter", w=1.5, h=2.0))
     # Home row: Caps, 11 keys + the extra BKSL (# key); Enter already placed.
-    keys.append(S(0, Y_HOME, "ShiftLock", w=1.5))
+    keys.append(S(0, Y_HOME, "Caps", w=1.5))
     for i in range(11):
         keys.append(C(1.5 + i, Y_HOME, "AC%02d" % (i + 1)))
     keys.append(C(12.5, Y_HOME, "BKSL"))

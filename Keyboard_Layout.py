@@ -10,8 +10,9 @@ import Keyboard_Detect
 import Keyboard_Templates
 
 # Geometry: a key cell is KEYSIZE plus a GAP; keys are placed in key units.
-KEYSIZE = 38
-GAP = 5
+# Kept compact so a full keyboard - with a numeric keypad later - still fits.
+KEYSIZE = 26
+GAP = 3
 CELL = KEYSIZE + GAP
 
 
@@ -48,8 +49,16 @@ class KeyboardLayout(QtWidgets.QWidget):
         controls.addStretch()
         outer.addLayout(controls)
 
-        # Board: keys are positioned absolutely on this container.
+        # Board: keys are positioned absolutely on this container. Trim the
+        # buttons' padding and font so short caps fit the small keys.
         self.board = QtWidgets.QWidget()
+        # min-width/height: 0 so a theme's min-width (FreeCAD sets one) can't
+        # override setFixedSize and make keys overlap; padding/margin 0 and a
+        # small font keep short caps centered and readable.
+        self.board.setStyleSheet(
+            "QPushButton { min-width: 0px; min-height: 0px;"
+            " padding: 0px; margin: 0px; font-size: 8pt; }"
+        )
         outer.addWidget(self.board)
         outer.addStretch()
 
@@ -92,11 +101,16 @@ class KeyboardLayout(QtWidgets.QWidget):
             if label is None:
                 label = labels.get(key["id"], "") or "?"
             button = QtWidgets.QPushButton(label, self.board)
-            button.setGeometry(
-                int(round(key["x"] * CELL)),
-                int(round(key["y"] * CELL)),
+            # setFixedSize (not just setGeometry) so a theme's min-width/padding
+            # can't enlarge the cap and eat the gaps - which made keys touch and
+            # overflow under FreeCAD's style.
+            button.setFixedSize(
                 int(round(key["w"] * CELL - GAP)),
                 int(round(key["h"] * CELL - GAP)),
+            )
+            button.move(
+                int(round(key["x"] * CELL)),
+                int(round(key["y"] * CELL)),
             )
             button.show()
             max_x = max(max_x, key["x"] + key["w"])
