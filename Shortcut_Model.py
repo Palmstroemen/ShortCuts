@@ -22,12 +22,13 @@ _MODS = {"Ctrl": "ctrl", "Shift": "shift", "Alt": "alt", "Meta": "meta"}
 # (rare in FreeCAD); it still counts as "occupied".
 FAMILY_ORDER = ["plain", "ctrl", "shift", "alt", "meta"]
 FAMILY_COLORS = {
-    "plain": "#888780",   # gray
+    "plain": "#D4B483",   # sand - no modifier (distinct from alt green/globals)
     "ctrl": "#378ADD",    # blue
     "shift": "#EF9F27",   # amber
     "alt": "#639922",     # green
     "meta": "#D4537E",    # pink
     "seq": "#7F77DD",     # purple - sequence prefix / completions
+    "global": "#d0d0d0",  # light gray - always-active global shortcut (occupied)
 }
 
 # Qt key tokens that are not single characters -> the static label the templates
@@ -108,16 +109,21 @@ def _families_of(mods):
     return set(mods) if mods else {"plain"}
 
 
-def build(entries, labels):
+def build(entries, labels, treat_global=True):
     """Build the keyboard shortcut model.
 
-    entries: list of {"text", "shortcut", "icon"(optional)}.
+    entries: list of {"text", "shortcut", "icon"(optional), "global"(optional)}.
     labels:  {xkb_name: cap} from Keyboard_Detect.
+    treat_global: when True, entries flagged "global" are tracked separately so
+      the renderer can show them greyed ("occupied"); when False they count as
+      ordinary shortcuts (e.g. the "All workbenches" view).
 
     Returns a dict:
-      by_key:    ref -> {"families": set, "prefix": bool, "entries": [entry...]}
-      by_modset: frozenset(families) -> [{"ref", "entry", "chord"}]  (single chord)
-      prefixes:  prefix_ref -> {"entries": [{"ref", "entry", "chord"}], "unplaced": [...]}
+      by_key:    ref -> {"families": set, "families_global": set,
+                         "prefix": bool, "entries": [entry...]}
+      by_modset: frozenset(families) -> [{"ref","entry","chord","global"}]
+      prefixes:  prefix_ref -> {"entries": [{"ref","entry","chord","global"}],
+                               "unplaced": [...]}
       unplaced:  entries whose key could not be mapped (for diagnostics)
     """
     label_to_id = _label_to_id(labels)
@@ -129,7 +135,8 @@ def build(entries, labels):
     def key_rec(ref):
         rec = by_key.get(ref)
         if rec is None:
-            rec = {"families": set(), "prefix": False, "entries": []}
+            rec = {"families": set(), "families_global": set(),
+                   "prefix": False, "entries": []}
             by_key[ref] = rec
         return rec
 
@@ -137,6 +144,7 @@ def build(entries, labels):
         chords = parse_sequence(entry.get("shortcut"))
         if not chords:
             continue
+        is_global = bool(entry.get("global")) and treat_global
 
         if len(chords) == 1:
             chord = chords[0]
@@ -145,10 +153,11 @@ def build(entries, labels):
                 unplaced.append(entry)
                 continue
             rec = key_rec(ref)
-            rec["families"].update(_families_of(chord["mods"]))
+            slot = "families_global" if is_global else "families"
+            rec[slot].update(_families_of(chord["mods"]))
             rec["entries"].append(entry)
             by_modset.setdefault(chord["mods"], []).append(
-                {"ref": ref, "entry": entry, "chord": chord})
+                {"ref": ref, "entry": entry, "chord": chord, "global": is_global})
         else:
             first = chords[0]
             prefix_ref = resolve_ref(first["key"], label_to_id)
@@ -161,7 +170,8 @@ def build(entries, labels):
             rec["prefix"] = True
             bucket = prefixes.setdefault(
                 prefix_ref, {"entries": [], "unplaced": []})
-            item = {"ref": comp_ref, "entry": entry, "chord": comp}
+            item = {"ref": comp_ref, "entry": entry, "chord": comp,
+                    "global": is_global}
             if comp_ref is None:
                 bucket["unplaced"].append(item)
             else:

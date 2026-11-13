@@ -34,7 +34,7 @@ mw = Gui.getMainWindow()
 verify = QtGui.QAction(mw)
 p = App.ParamGet("User parameter:BaseApp/ShortCutsDev")
 path = os.path.dirname(__file__) + "/Resources/icons/"
-__showAll__ = False
+__listFilter__ = "shortcuts"  # right-list filter: all / shortcuts / empty
 
 
 def wbIcon(i):
@@ -200,10 +200,15 @@ def wbSelectorWidget():
     listWBSorted.reverse()
 
     icon = QtGui.QIcon(":/icons/freecad")
+    itemAll = QtGui.QListWidgetItem(icon, "All workbenches", wbSelector)
+    itemAll.setData(QtCore.Qt.UserRole, "AllWorkbenches")
+    wbSelector.addItem(itemAll)
     item = QtGui.QListWidgetItem(icon, "Global shortcuts", wbSelector)
     item.setData(QtCore.Qt.UserRole, "GlobalShortcuts")
     wbSelector.addItem(item)
     for i in listWBSorted:
+        if i == "NoneWorkbench" or listWB[i].MenuText == "<none>":
+            continue
         try:
             icon = wbIcon(Gui.listWorkbenches()[i].Icon)
         except AttributeError:
@@ -262,6 +267,33 @@ def tableWidget():
     table.setColumnWidth(0, 100)  # Set the desired width for the first column
     return table
 
+def workbenchCommands(workbench):
+    """Command names belonging to a workbench, or None for no filter.
+
+    Returns the set of command object names the workbench puts on its toolbars,
+    so the table and keyboard can show only that workbench's own functions. None
+    means "do not filter" - used for the "All workbenches" and "Global
+    shortcuts" entries and whenever the set can't be determined.
+    """
+    if not workbench or workbench in ("AllWorkbenches", "GlobalShortcuts"):
+        return None
+    try:
+        wb = Gui.getWorkbench(workbench)
+    except Exception:
+        return None
+    names = set()
+    getItems = getattr(wb, "getToolbarItems", None)
+    if callable(getItems):
+        try:
+            for cmds in getItems().values():
+                for c in cmds:
+                    if c and c != "Separator":
+                        names.add(c)
+        except Exception:
+            pass
+    return names or None
+
+
 def updateTable(wbSelector, table, keyboard=None):
     """Update table widget items."""
     #workbench = wbSelector.itemData(wbSelector.currentIndex())
@@ -271,10 +303,32 @@ def updateTable(wbSelector, table, keyboard=None):
 
     update(workbench)
 
+    # What this left-hand selection shows: a specific workbench's own commands
+    # ("wb"), only the global Std_ ones ("global"), or everything ("all").
+    if workbench == "GlobalShortcuts":
+        mode, allowed = "global", None
+    elif workbench in (None, "", "AllWorkbenches"):
+        mode, allowed = "all", None
+    else:
+        allowed = workbenchCommands(workbench)
+        mode = "wb" if allowed is not None else "all"
+
+    def _is_global(name):
+        return name.startswith("Std_")
+
+    def _in_list(name):
+        if mode == "global":
+            return _is_global(name)
+        if mode == "wb":
+            return (not _is_global(name)) and name in allowed
+        return True  # all
+
     # build shortcuts list
     actionList = []
     row = 0
     for i in actions:
+        if not _in_list(i):
+            continue
         text = actions[i].text()
         text = text.replace("&", "")
         shortcut = actions[i].shortcut().toString()
@@ -288,58 +342,59 @@ def updateTable(wbSelector, table, keyboard=None):
         kb_entries = []
         for i in actions:
             sc = actions[i].shortcut().toString()
-            if sc:
-                ic = actions[i].icon()
-                kb_entries.append({
-                    "text": actions[i].text().replace("&", ""),
-                    "shortcut": sc,
-                    "icon": ic if (ic and not ic.isNull()) else None,
-                })
-        keyboard.set_shortcuts(kb_entries)
+            if not sc:
+                continue
+            is_global = _is_global(i)
+            # A specific workbench gets its own commands plus every global one
+            # (globals always apply, so they are always shown - greyed). The
+            # global view shows only globals; the all view shows everything.
+            if mode == "wb" and not is_global and i not in allowed:
+                continue
+            if mode == "global" and not is_global:
+                continue
+            ic = actions[i].icon()
+            kb_entries.append({
+                "text": actions[i].text().replace("&", ""),
+                "shortcut": sc,
+                "icon": ic if (ic and not ic.isNull()) else None,
+                "global": is_global,
+            })
+        keyboard.set_shortcuts(kb_entries, dim_global=(mode == "wb"))
 
-    if __showAll__: # sort by action
-        actionList = sorted(actionList)
-        row   = len(actions)
-    else: # sort by shortcut (the third element of triple in action list)
-        actionList = sorted(actionList,key=lambda x: x[2])
-    sort = []
-    for i in actionList:
-        sort.append(i[1])
+    # Which rows the list-filter buttons show: all, only those with a shortcut,
+    # or only the empty ones (so a shortcut can be assigned to them).
+    if __listFilter__ == "shortcuts":
+        display = [a for a in actionList if a[2]]
+        display.sort(key=lambda x: x[2])
+    elif __listFilter__ == "empty":
+        display = [a for a in actionList if not a[2]]
+        display.sort(key=lambda x: x[0].lower())
+    else:  # all
+        display = sorted(actionList, key=lambda x: x[0].lower())
 
     table.blockSignals(True)
     table.clearContents()
-    table.setRowCount(row)
-
-    # build the table
-    row = 0
-    iconNr = 0
-    for i in sort:
-        showLine = True
+    table.setRowCount(len(display))
+    for r, entry in enumerate(display):
+        name = entry[1]
         shortcut = QtGui.QTableWidgetItem()
-        text = actions[i].shortcut().toString()
+        text = actions[name].shortcut().toString()
         if text:
             shortcut.setText(text)
-            shortcut.setIcon(QtGui.QIcon(itemIcon(i)))
-        elif not __showAll__:
-            showLine = False
+            shortcut.setIcon(QtGui.QIcon(itemIcon(name)))
+        shortcut.setData(32, name)
 
-        if showLine:
-            shortcut.setData(32, i)
+        command = QtGui.QTableWidgetItem()
+        command.setText(actions[name].text().replace("&", ""))
+        command.setToolTip(actions[name].toolTip())
+        command.setFlags(QtCore.Qt.ItemIsEnabled)
+        if actions[name].icon():
+            command.setIcon(actions[name].icon())
+        else:
+            command.setIcon(QtGui.QIcon(":/icons/freecad"))
 
-            command = QtGui.QTableWidgetItem()
-            text = actions[i].text()
-            text = text.replace("&", "")
-            command.setText(text)
-            command.setToolTip(actions[i].toolTip())
-            command.setFlags(QtCore.Qt.ItemIsEnabled)
-            if actions[i].icon():
-                command.setIcon(actions[i].icon())
-            else:
-                command.setIcon(QtGui.QIcon(":/icons/freecad"))
-
-            table.setItem(row, 0, shortcut)
-            table.setItem(row, 1, command)
-            row += 1
+        table.setItem(r, 0, shortcut)
+        table.setItem(r, 1, command)
     table.blockSignals(False)
 
 
@@ -480,12 +535,8 @@ def preferences():
 
     def on_header_click(logical_index):
         header = table.horizontalHeaderItem(logical_index).text()
-        print("Clicked on", header)
-        global __showAll__
-        if header == "Shortcut":
-            __showAll__ = False
-        else:
-            __showAll__ = True
+        global __listFilter__
+        __listFilter__ = "shortcuts" if header == "Shortcut" else "all"
         updateTable(wbSelector, table, keyboard)
 
     table.horizontalHeader().sectionClicked.connect(on_header_click)
@@ -493,11 +544,34 @@ def preferences():
 
     updateTable(wbSelector, table, keyboard)
 
+    # Right-list filter buttons: all commands, only those with a shortcut, or
+    # only the empty ones (to assign a shortcut to them).
+    def setListFilter(filt):
+        global __listFilter__
+        __listFilter__ = filt
+        updateTable(wbSelector, table, keyboard)
+
+    btnAll = QtGui.QPushButton("All")
+    btnAll.setToolTip("Show all commands")
+    btnAll.clicked.connect(lambda: setListFilter("all"))
+    btnShortcuts = QtGui.QPushButton("Shortcuts")
+    btnShortcuts.setToolTip("Show only commands that have a shortcut")
+    btnShortcuts.clicked.connect(lambda: setListFilter("shortcuts"))
+    btnEmpty = QtGui.QPushButton("Empty")
+    btnEmpty.setToolTip("Show only commands without a shortcut")
+    btnEmpty.clicked.connect(lambda: setListFilter("empty"))
+    loFilter = QtGui.QHBoxLayout()
+    loFilter.addWidget(btnAll)
+    loFilter.addWidget(btnShortcuts)
+    loFilter.addWidget(btnEmpty)
+    loFilter.addStretch()
+
     # Layout
     loRight = QtGui.QVBoxLayout()
+    loRight.addLayout(loFilter)
     loRight.addWidget(search)
     loRight.addWidget(table)
-    loRight.insertLayout(2, loBtn)
+    loRight.addLayout(loBtn)
 
     loMid = QtGui.QVBoxLayout()
     loMid.addWidget(keyboard)

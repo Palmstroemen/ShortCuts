@@ -26,8 +26,11 @@ KEYSIZE = 26
 GAP = 3
 CELL = KEYSIZE + GAP
 
-# Overview corner for each modifier family.
-_CORNER = {"plain": "tl", "ctrl": "tr", "shift": "bl", "alt": "br"}
+# Overview corner for each modifier family. Arranged to echo the physical
+# modifier positions (Shift above Ctrl on the left, Alt on the right), which
+# reads more intuitively: Shift top-left, direct top-right, Ctrl bottom-left,
+# Alt bottom-right.
+_CORNER = {"shift": "tl", "plain": "tr", "ctrl": "bl", "alt": "br"}
 _PIP = 7
 
 # Static key labels that act as modifier toggles, mapped to their family.
@@ -41,7 +44,8 @@ class KeyboardLayout(QtWidgets.QWidget):
         self.manual_override = manual_override
         self.layout_meta = {}
 
-        self.entries = []          # [{text, shortcut, icon}]
+        self.entries = []          # [{text, shortcut, icon, global}]
+        self.dim_global = False    # grey out global shortcuts (specific-WB view)
         self.model = None
         self.active_mods = set()   # focused modifier families
         self.active_prefix = None  # focused sequence-prefix ref
@@ -101,16 +105,49 @@ class KeyboardLayout(QtWidgets.QWidget):
         outer.addWidget(self.board)
         outer.addStretch()
 
+        # Let the real Ctrl/Shift/Alt keys toggle the focus layers, as if their
+        # on-screen key were clicked. An application-wide filter catches them
+        # whatever holds focus inside the dialog; Qt drops it when we are
+        # destroyed.
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
         self._rebuild()
+
+    # --- real-keyboard toggle ---------------------------------------------
+
+    _REAL_MOD_KEYS = None  # built lazily (needs QtCore.Qt)
+
+    def eventFilter(self, obj, event):
+        """Toggle a modifier layer when the physical modifier key is pressed."""
+        if event.type() == QtCore.QEvent.KeyPress and not event.isAutoRepeat():
+            if KeyboardLayout._REAL_MOD_KEYS is None:
+                KeyboardLayout._REAL_MOD_KEYS = {
+                    QtCore.Qt.Key_Control: "ctrl",
+                    QtCore.Qt.Key_Shift: "shift",
+                    QtCore.Qt.Key_Alt: "alt",
+                }
+            family = KeyboardLayout._REAL_MOD_KEYS.get(event.key())
+            if family is not None:
+                # Don't hijack a modifier typed into a text field (e.g. when
+                # recording a shortcut in the table or using the search box).
+                focus = QtWidgets.QApplication.focusWidget()
+                if not isinstance(focus, QtWidgets.QLineEdit):
+                    self._toggle_mod(family)
+        return False
 
     # --- public API --------------------------------------------------------
 
-    def set_shortcuts(self, entries):
+    def set_shortcuts(self, entries, dim_global=False):
         """Supply the active workbench's shortcuts and redraw the overlay.
 
-        entries: list of {"text", "shortcut", "icon"(QIcon or None)}.
+        entries: list of {"text", "shortcut", "icon"(QIcon or None), "global"}.
+        dim_global: when True, entries flagged "global" are drawn greyed, to show
+        the key is already taken by an always-active shortcut.
         """
         self.entries = list(entries or [])
+        self.dim_global = dim_global
         self.active_prefix = None   # refs may have changed; keep modifier focus
         self._rebuild()
 
@@ -162,7 +199,8 @@ class KeyboardLayout(QtWidgets.QWidget):
             shape_id = Keyboard_Templates.default_template(self.layout_meta)
         keys = Keyboard_Templates.TEMPLATES[shape_id]["keys"]
 
-        self.model = Shortcut_Model.build(self.entries, labels)
+        self.model = Shortcut_Model.build(
+            self.entries, labels, treat_global=self.dim_global)
 
         # Clear everything previously drawn (buttons and pips).
         for child in self.board.findChildren(QtWidgets.QWidget):
@@ -192,6 +230,8 @@ class KeyboardLayout(QtWidgets.QWidget):
             max_x = max(max_x, key["x"] + key["w"])
             max_y = max(max_y, key["y"] + key["h"])
 
+        self._add_legend()
+
         self.board.setFixedSize(
             int(round(max_x * CELL - GAP)),
             int(round(max_y * CELL - GAP)),
@@ -210,19 +250,28 @@ class KeyboardLayout(QtWidgets.QWidget):
             window.resize(window.width(), keep_height)
 
     def _focus_targets(self):
-        """Return (mode, {ref: entry}, None). mode is overview/mods/prefix."""
+        """Return (mode, {ref: (entry, is_global)}, None).
+
+        mode is overview/mods/prefix. A workbench shortcut wins a cell over a
+        global one so the key shows the workbench command, not the greyed global.
+        """
+        def place(targets, item):
+            ref, is_global = item["ref"], item["global"]
+            if ref not in targets or (targets[ref][1] and not is_global):
+                targets[ref] = (item["entry"], is_global)
+
         if self.active_prefix is not None and self.model:
             bucket = self.model["prefixes"].get(self.active_prefix)
             targets = {}
             if bucket:
                 for item in bucket["entries"]:
-                    targets.setdefault(item["ref"], item["entry"])
+                    place(targets, item)
             return "prefix", targets, None
         if self.active_mods and self.model:
             items = self.model["by_modset"].get(frozenset(self.active_mods), [])
             targets = {}
             for item in items:
-                targets.setdefault(item["ref"], item["entry"])
+                place(targets, item)
             return "mods", targets, None
         return "overview", {}, None
 
@@ -237,35 +286,56 @@ class KeyboardLayout(QtWidgets.QWidget):
         elif is_prefix:
             button.clicked.connect(lambda _=False, r=ref: self._toggle_prefix(r))
 
+        # Modifier keys always wear their colour: a frame normally, a solid fill
+        # while their layer is active - in every mode, so they read as the
+        # coloured controls they are.
+        if mod_family:
+            color = Shortcut_Model.FAMILY_COLORS[mod_family]
+            if mode == "mods" and mod_family in self.active_mods:
+                self._fill(button, color)
+            else:
+                self._frame(button, color)
+            return
+
         if mode == "overview":
             if rec:
+                # Workbench shortcuts get their family colour; a family used only
+                # by a global shortcut gets the grey "occupied" pip.
+                grey = rec["families_global"] - rec["families"]
                 for family in rec["families"]:
                     corner = _CORNER.get(family)
                     if corner:
                         self._add_pip(button, corner, bw, bh,
                                       Shortcut_Model.FAMILY_COLORS[family])
+                for family in grey:
+                    corner = _CORNER.get(family)
+                    if corner:
+                        self._add_pip(button, corner, bw, bh,
+                                      Shortcut_Model.FAMILY_COLORS["global"])
                 if is_prefix:
-                    self._add_prefix_dot(button, bw)
+                    self._add_prefix_dot(button, bw, bh)
             return
 
-        # Focus modes: highlight triggers and targets, dim the rest.
-        if mode == "mods" and mod_family in self.active_mods:
-            self._fill(button, Shortcut_Model.FAMILY_COLORS[mod_family])
-            return
+        # Focus modes: highlight the active prefix and targets, dim the rest.
         if mode == "prefix" and is_prefix and ref == self.active_prefix:
             self._fill(button, Shortcut_Model.FAMILY_COLORS["seq"])
             return
 
         if ref in targets:
-            color = (Shortcut_Model.FAMILY_COLORS["seq"] if mode == "prefix"
-                     else self._mods_color())
-            self._fill(button, color)
-            icon = targets[ref].get("icon")
+            entry, is_global = targets[ref]
+            if is_global:
+                self._fill(button, Shortcut_Model.FAMILY_COLORS["global"],
+                           text="#555555")
+            else:
+                color = (Shortcut_Model.FAMILY_COLORS["seq"] if mode == "prefix"
+                         else self._mods_color())
+                self._fill(button, color)
+            icon = entry.get("icon")
             if icon is not None and not icon.isNull():
                 button.setText("")
                 button.setIcon(icon)
                 button.setIconSize(QtCore.QSize(16, 16))
-            button.setToolTip(targets[ref].get("text", ""))
+            button.setToolTip(entry.get("text", ""))
             return
 
         # Dim the non-participating keys.
@@ -280,10 +350,79 @@ class KeyboardLayout(QtWidgets.QWidget):
                 return Shortcut_Model.FAMILY_COLORS[family]
         return Shortcut_Model.FAMILY_COLORS["ctrl"]
 
-    def _fill(self, button, color):
+    def _fill(self, button, color, text="white"):
         button.setStyleSheet(
-            "QPushButton{background:%s;color:white;border:0.5px solid %s;"
-            "min-width:0;min-height:0;padding:0;font-size:8pt;}" % (color, color))
+            "QPushButton{background:%s;color:%s;border:0.5px solid %s;"
+            "min-width:0;min-height:0;padding:0;font-size:8pt;}"
+            % (color, text, color))
+
+    def _frame(self, button, color):
+        button.setStyleSheet(
+            "QPushButton{border:2px solid %s;background:transparent;"
+            "min-width:0;min-height:0;padding:0;font-size:8pt;}" % color)
+
+    def _add_legend(self):
+        """A key-shaped legend in the free space above the navigation cluster:
+        a sample key (real key look, big "A") spanning the full cluster width,
+        with the four family colours in its corners and the family names in
+        matching colours above and below - so the corner scheme reads at a
+        glance (top-left Shift / top-right direct / bottom-left Ctrl /
+        bottom-right Alt)."""
+        kx = Keyboard_Templates.NAV_X * CELL
+        kw = int(round(Keyboard_Templates.NAV_W * CELL - GAP))
+        kh = kw                       # square key
+        base_y = int(round(Keyboard_Templates.Y_FUNC * CELL))
+        lh = 16                       # label row height
+        key_y = base_y + lh + 1
+
+        # The sample key - a plain QPushButton keeps the theme's key background.
+        # The board stylesheet pins QPushButton font-size to 8pt, so the big cap
+        # must come from the button's own stylesheet; scale it to the key so it
+        # stays proportional to the small keys (~1/3 of the key height).
+        key = QtWidgets.QPushButton("A", self.board)
+        small_key_h = CELL - GAP
+        font_pt = max(8, int(round(8.0 * kh / small_key_h)))
+        key.setStyleSheet(
+            "QPushButton{font-size:%dpt;padding:0;min-width:0;min-height:0;}"
+            % font_pt)
+        key.setFocusPolicy(QtCore.Qt.NoFocus)
+        key.setFixedSize(kw, kh)
+        key.move(int(round(kx)), key_y)
+        fld = 15
+        for family, corner in (("shift", "tl"), ("plain", "tr"),
+                               ("ctrl", "bl"), ("alt", "br")):
+            swatch = QtWidgets.QFrame(key)
+            swatch.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+            swatch.setStyleSheet(
+                "background:%s;border-radius:2px;"
+                % Shortcut_Model.FAMILY_COLORS[family])
+            swatch.setFixedSize(fld, fld)
+            sx = 3 if corner in ("tl", "bl") else kw - fld - 3
+            sy = 3 if corner in ("tl", "tr") else kh - fld - 3
+            swatch.move(sx, sy)
+            swatch.show()
+        key.show()
+
+        # Family names outside the key: above the two top corners, below the two
+        # bottom ones, each in its family colour.
+        half = int(kw / 2)
+        left = QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
+        right = QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter
+        rows = [
+            ("Shift", "shift", int(round(kx)), base_y, half, left),
+            ("direct", "plain", int(round(kx)) + half, base_y, kw - half, right),
+            ("Ctrl", "ctrl", int(round(kx)), key_y + kh + 1, half, left),
+            ("Alt", "alt", int(round(kx)) + half, key_y + kh + 1, kw - half, right),
+        ]
+        for text, family, lx, ly, lw, align in rows:
+            lbl = QtWidgets.QLabel(text, self.board)
+            lbl.setAlignment(align)
+            lbl.setStyleSheet(
+                "QLabel{color:%s;font-size:8pt;background:transparent;}"
+                % Shortcut_Model.FAMILY_COLORS[family])
+            lbl.setFixedSize(lw, lh)
+            lbl.move(lx, ly)
+            lbl.show()
 
     def _add_pip(self, button, corner, bw, bh, color):
         pip = QtWidgets.QFrame(button)
@@ -294,11 +433,14 @@ class KeyboardLayout(QtWidgets.QWidget):
         pip.move(x, y)
         pip.show()
 
-    def _add_prefix_dot(self, button, bw):
-        dot = QtWidgets.QFrame(button)
-        dot.setStyleSheet(
-            "background:transparent;border:1.5px solid %s;border-radius:5px;"
-            % Shortcut_Model.FAMILY_COLORS["seq"])
-        dot.setFixedSize(9, 9)
-        dot.move(int(bw / 2 - 4), 2)
-        dot.show()
+    def _add_prefix_dot(self, button, bw, bh):
+        # A translucent purple tint laid over the cap marks a key that starts a
+        # key sequence (e.g. G in G, S). Transparent to clicks so the key still
+        # toggles its prefix layer.
+        size = max(min(bw, bh) - 6, 12)
+        ov = QtWidgets.QFrame(button)
+        ov.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        ov.setStyleSheet("background:rgba(127,119,221,0.33);border-radius:4px;")
+        ov.setFixedSize(size, size)
+        ov.move(int((bw - size) / 2), int((bh - size) / 2))
+        ov.show()
