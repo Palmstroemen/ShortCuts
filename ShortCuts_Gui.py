@@ -262,7 +262,7 @@ def tableWidget():
     table.setColumnWidth(0, 100)  # Set the desired width for the first column
     return table
 
-def updateTable(wbSelector, table):
+def updateTable(wbSelector, table, keyboard=None):
     """Update table widget items."""
     #workbench = wbSelector.itemData(wbSelector.currentIndex())
     wb = wbSelector.selectedItems()
@@ -282,6 +282,20 @@ def updateTable(wbSelector, table):
             row += 1
         actionList.append([text, actions[i].objectName(), shortcut])
     App.tableNames = actionList
+
+    # Push the active workbench's shortcuts to the keyboard overlay.
+    if keyboard is not None:
+        kb_entries = []
+        for i in actions:
+            sc = actions[i].shortcut().toString()
+            if sc:
+                ic = actions[i].icon()
+                kb_entries.append({
+                    "text": actions[i].text().replace("&", ""),
+                    "shortcut": sc,
+                    "icon": ic if (ic and not ic.isNull()) else None,
+                })
+        keyboard.set_shortcuts(kb_entries)
 
     if __showAll__: # sort by action
         actionList = sorted(actionList)
@@ -421,6 +435,9 @@ def preferences():
     # Search
     search = searchLine(table)
 
+    # Keyboard view (created early so the selection handlers can feed it).
+    keyboard = kb.KeyboardLayout()
+
     # Functions and connections
     def onItemChanged(item):
         """Save shortcut."""
@@ -459,7 +476,7 @@ def preferences():
                 Gui.activateWorkbench(wb)
             except:
                 a = 2 # dummy reaction.
-        updateTable(wbSelector, table)
+        updateTable(wbSelector, table, keyboard)
 
     def on_header_click(logical_index):
         header = table.horizontalHeaderItem(logical_index).text()
@@ -469,12 +486,12 @@ def preferences():
             __showAll__ = False
         else:
             __showAll__ = True
-        updateTable(wbSelector, table)
+        updateTable(wbSelector, table, keyboard)
 
     table.horizontalHeader().sectionClicked.connect(on_header_click)
     wbSelector.itemSelectionChanged.connect(onCurrentWBchanged)
 
-    updateTable(wbSelector, table)
+    updateTable(wbSelector, table, keyboard)
 
     # Layout
     loRight = QtGui.QVBoxLayout()
@@ -483,7 +500,6 @@ def preferences():
     loRight.insertLayout(2, loBtn)
 
     loMid = QtGui.QVBoxLayout()
-    keyboard = kb.KeyboardLayout()
     loMid.addWidget(keyboard)
     loMid.addStretch()
 
