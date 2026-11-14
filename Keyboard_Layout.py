@@ -51,6 +51,15 @@ class KeyboardLayout(QtWidgets.QWidget):
         self.active_prefix = None  # focused sequence-prefix ref
         self.capture_armed = False # real keys record a combo instead of toggling
         self.capture_handler = None
+        self.capture_progress = None  # optional callback(partial_string)
+        self.capture_chords = []      # chords collected for the current sequence
+        # A plain (modifier-less) chord may start a key sequence ("G, S"), so we
+        # wait briefly for a following chord before finalising; a modifier chord
+        # (Ctrl+S) is unambiguous and finalises at once.
+        self.capture_timer = QtCore.QTimer(self)
+        self.capture_timer.setSingleShot(True)
+        self.capture_timer.setInterval(500)
+        self.capture_timer.timeout.connect(self._emit_capture)
 
         outer = QtWidgets.QVBoxLayout()
         self.setLayout(outer)
@@ -140,18 +149,23 @@ class KeyboardLayout(QtWidgets.QWidget):
             if key in bare_mods:
                 return False  # wait for the non-modifier key, keep modifiers held
             if key == QtCore.Qt.Key_Escape:
+                self._reset_capture()
                 self.capture_handler(None)
                 return True
-            seq = None
-            try:
-                seq = QtGui.QKeySequence(event.keyCombination())
-            except Exception:
-                try:
-                    seq = QtGui.QKeySequence(int(event.modifiers()) | int(key))
-                except Exception:
-                    seq = QtGui.QKeySequence(
-                        int(event.modifiers().value) | int(key))
-            self.capture_handler(seq.toString())
+            chord = self._chord_string(event)
+            mod_mask = (QtCore.Qt.ControlModifier | QtCore.Qt.ShiftModifier
+                        | QtCore.Qt.AltModifier | QtCore.Qt.MetaModifier)
+            has_mod = bool(event.modifiers() & mod_mask)
+            self.capture_chords.append(chord)
+            # A lone modifier chord, or a full 4-chord sequence, is complete now.
+            # A plain first/next chord might still grow, so wait out the timer.
+            if (len(self.capture_chords) == 1 and has_mod) \
+                    or len(self.capture_chords) >= 4:
+                self._emit_capture()
+            else:
+                if self.capture_progress is not None:
+                    self.capture_progress(", ".join(self.capture_chords))
+                self.capture_timer.start()
             return True
 
         family = {QtCore.Qt.Key_Control: "ctrl", QtCore.Qt.Key_Shift: "shift",
@@ -162,13 +176,45 @@ class KeyboardLayout(QtWidgets.QWidget):
 
     # --- public API --------------------------------------------------------
 
+    def _chord_string(self, event):
+        """The Qt key-sequence string for a single key event (one chord)."""
+        try:
+            seq = QtGui.QKeySequence(event.keyCombination())
+        except Exception:
+            try:
+                seq = QtGui.QKeySequence(
+                    int(event.modifiers()) | int(event.key()))
+            except Exception:
+                seq = QtGui.QKeySequence(
+                    int(event.modifiers().value) | int(event.key()))
+        return seq.toString()
+
+    def _emit_capture(self):
+        """Finalise the collected chords and report them to the handler."""
+        self.capture_timer.stop()
+        chords = self.capture_chords
+        self.capture_chords = []
+        if chords and self.capture_handler is not None:
+            self.capture_handler(", ".join(chords))
+
+    def _reset_capture(self):
+        """Drop any half-recorded sequence (cancel or disarm)."""
+        self.capture_timer.stop()
+        self.capture_chords = []
+
     def set_capture_handler(self, handler):
         """Register a callback(shortcut_string | None) for captured combos."""
         self.capture_handler = handler
 
+    def set_capture_progress(self, callback):
+        """Register a callback(partial_string) shown while a sequence records."""
+        self.capture_progress = callback
+
     def set_armed(self, armed):
         """Arm/disarm real-keyboard capture (vs. the modifier-toggle mode)."""
         self.capture_armed = bool(armed)
+        if not self.capture_armed:
+            self._reset_capture()
 
     def set_shortcuts(self, entries, dim_global=False):
         """Supply the active workbench's shortcuts and redraw the overlay.

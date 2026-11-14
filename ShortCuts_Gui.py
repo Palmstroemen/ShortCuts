@@ -688,7 +688,14 @@ def preferences():
         assignBtnLayout.addWidget(btnKeep)
         assignBtnLayout.addStretch()
 
+    def onCaptureProgress(partial):
+        if armed["command"] is None:
+            return
+        assignLabel.setText(
+            "Recording %s ... (pause to finish, Esc to cancel)" % partial)
+
     keyboard.set_capture_handler(onCapture)
+    keyboard.set_capture_progress(onCaptureProgress)
     table.itemSelectionChanged.connect(onTableSelection)
 
     # Layout
