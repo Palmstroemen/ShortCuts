@@ -58,12 +58,18 @@ class _DropBoard(QtWidgets.QWidget):
 
     def dragEnterEvent(self, event):
         if self._ok(event):
+            self._owner._hover_mod = None   # fresh drag: first hover toggles
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event):
         if self._ok(event):
+            try:
+                pos = event.position().toPoint()
+            except AttributeError:
+                pos = event.pos()
+            self._owner._drag_hover(pos)
             event.acceptProposedAction()
         else:
             event.ignore()
@@ -82,6 +88,44 @@ class _DropBoard(QtWidgets.QWidget):
         event.acceptProposedAction()
 
 
+class _KeyDragger(QtCore.QObject):
+    """Starts a drag carrying the command currently shown on a focused key."""
+
+    def __init__(self, owner):
+        super().__init__(owner)
+        self._cmd = None
+        self._press = None
+
+    def eventFilter(self, obj, event):
+        et = event.type()
+        if et == QtCore.QEvent.MouseButtonPress \
+                and event.button() == QtCore.Qt.LeftButton:
+            self._cmd = obj.property("kbcommand")
+            try:
+                self._press = event.position().toPoint()
+            except AttributeError:
+                self._press = event.pos()
+        elif et == QtCore.QEvent.MouseMove and self._cmd \
+                and (event.buttons() & QtCore.Qt.LeftButton):
+            try:
+                pt = event.position().toPoint()
+            except AttributeError:
+                pt = event.pos()
+            if (pt - self._press).manhattanLength() \
+                    >= QtWidgets.QApplication.startDragDistance():
+                cmd = self._cmd
+                self._cmd = None
+                drag = QtGui.QDrag(obj)
+                mime = QtCore.QMimeData()
+                mime.setData(MIME_COMMAND, QtCore.QByteArray(cmd.encode("utf-8")))
+                drag.setMimeData(mime)
+                drag.exec(QtCore.Qt.CopyAction)
+                return True
+        elif et == QtCore.QEvent.MouseButtonRelease:
+            self._cmd = None
+        return False
+
+
 class KeyboardLayout(QtWidgets.QWidget):
     def __init__(self, manual_override=None):
         super().__init__()
@@ -98,6 +142,8 @@ class KeyboardLayout(QtWidgets.QWidget):
         self.capture_handler = None
         self.capture_progress = None  # optional callback(partial_string)
         self.drop_handler = None      # callback(command, seq_string) for drag&drop
+        self._key_dragger = _KeyDragger(self)  # drags a command off a focused key
+        self._hover_mod = None        # modifier key last hovered during a drag
         self.capture_chords = []      # chords collected for the current sequence
         # A plain (modifier-less) chord may start a key sequence ("G, S"), so we
         # wait briefly for a following chord before finalising; a modifier chord
@@ -282,6 +328,56 @@ class KeyboardLayout(QtWidgets.QWidget):
             return  # dropping on a modifier key (or a non-key) does nothing yet
         self.drop_handler(command, self._compose_seq(label))
 
+    def _drag_hover(self, pos):
+        """While dragging, hovering an on-screen modifier key toggles that layer.
+
+        Each time the pointer enters a modifier key its family flips in the drop
+        set, so any combination (e.g. Ctrl+Alt) can be built by passing over the
+        keys - without holding a physical modifier, which Qt would read as a
+        copy/move drag gesture.
+        """
+        btn = self.board.childAt(pos)
+        while btn is not None and not btn.property("kbref"):
+            btn = btn.parentWidget()
+        ref = btn.property("kbref") if btn is not None else None
+        family = _MOD_LABELS.get(btn.property("kblabel")) if btn is not None else None
+        here = ref if family is not None else None
+        if here == self._hover_mod:
+            return  # still on the same key (or still not on a modifier)
+        self._hover_mod = here
+        if family is None:
+            return
+        mods = set(self.active_mods)
+        mods.discard(family) if family in mods else mods.add(family)
+        self.active_mods = mods
+        self.active_prefix = None
+        self._refocus()
+
+    def _refocus(self):
+        """Re-style the existing keys for the current layer without rebuilding.
+
+        Rebuilding deletes and recreates the buttons, which is unsafe while a
+        drag (whose source may be one of those buttons) is in progress.
+        """
+        if not self.model:
+            return
+        mode, targets, focus_entry = self._focus_targets()
+        for btn in self.board.findChildren(QtWidgets.QPushButton):
+            ref = btn.property("kbref")
+            if not ref:
+                continue  # the legend's sample key
+            label = btn.property("kblabel")
+            for child in btn.findChildren(QtWidgets.QFrame):
+                child.setParent(None)
+                child.deleteLater()
+            btn.setIcon(QtGui.QIcon())
+            btn.setText(label)
+            btn.setToolTip("")
+            btn.setProperty("kbcommand", None)
+            self._style_key(btn, ref, label, btn.width(), btn.height(),
+                            mode, targets, focus_entry, connect=False)
+        self.reset_button.setEnabled(mode != "overview")
+
     def set_armed(self, armed):
         """Arm/disarm real-keyboard capture (vs. the modifier-toggle mode)."""
         self.capture_armed = bool(armed)
@@ -374,6 +470,7 @@ class KeyboardLayout(QtWidgets.QWidget):
             button.move(int(round(key["x"] * CELL)), int(round(key["y"] * CELL)))
             button.setProperty("kbref", ref)
             button.setProperty("kblabel", label)
+            button.installEventFilter(self._key_dragger)
 
             self._style_key(button, ref, label, bw, bh, mode, targets, focus_entry)
             button.show()
@@ -426,16 +523,21 @@ class KeyboardLayout(QtWidgets.QWidget):
             return "mods", targets, None
         return "overview", {}, None
 
-    def _style_key(self, button, ref, label, bw, bh, mode, targets, _fe):
+    def _style_key(self, button, ref, label, bw, bh, mode, targets, _fe,
+                   connect=True):
         rec = self.model["by_key"].get(ref) if self.model else None
         mod_family = _MOD_LABELS.get(label)
         is_prefix = bool(rec and rec["prefix"])
 
-        # Make triggers clickable in every mode.
-        if mod_family:
-            button.clicked.connect(lambda _=False, f=mod_family: self._toggle_mod(f))
-        elif is_prefix:
-            button.clicked.connect(lambda _=False, r=ref: self._toggle_prefix(r))
+        # Make triggers clickable in every mode (only on first build - a restyle
+        # reuses the button and must not stack a second connection).
+        if connect:
+            if mod_family:
+                button.clicked.connect(
+                    lambda _=False, f=mod_family: self._toggle_mod(f))
+            elif is_prefix:
+                button.clicked.connect(
+                    lambda _=False, r=ref: self._toggle_prefix(r))
 
         # Modifier keys always wear their colour: a frame normally, a solid fill
         # while their layer is active - in every mode, so they read as the
@@ -481,6 +583,9 @@ class KeyboardLayout(QtWidgets.QWidget):
                 color = (Shortcut_Model.FAMILY_COLORS["seq"] if mode == "prefix"
                          else self._mods_color())
                 self._fill(button, color)
+                # This key holds a (non-global) shortcut in the focused layer,
+                # so it can be dragged onto another key to move it.
+                button.setProperty("kbcommand", entry.get("command"))
             icon = entry.get("icon")
             if icon is not None and not icon.isNull():
                 button.setText("")

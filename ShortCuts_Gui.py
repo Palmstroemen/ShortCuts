@@ -420,6 +420,7 @@ def updateTable(wbSelector, table, keyboard=None):
                 "shortcut": sc,
                 "icon": ic if (ic and not ic.isNull()) else None,
                 "global": is_global,
+                "command": actions[i].objectName(),
             })
         keyboard.set_shortcuts(kb_entries, dim_global=(mode == "wb"))
 
