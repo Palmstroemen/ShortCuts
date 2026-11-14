@@ -234,15 +234,12 @@ def searchLine(table):
     search = QtGui.QLineEdit()
 
     def onSearch(text):
-        """Show or hide commands on search."""
-        for n in range(table.rowCount()):
-            t = table.item(n, 0).text()
-            if t and text and text.lower() in t.lower():
-                table.setRowHidden(n, False)
-            elif text:
-                table.setRowHidden(n, True)
-            else:
-                table.setRowHidden(n, False)
+        """Show or hide commands on search (matches the name and the shortcut)."""
+        t = text.lower()
+        for n in range(table.count()):
+            it = table.item(n)
+            hay = (it.text() + " " + (it.data(SC_ROLE) or "")).lower()
+            it.setHidden(bool(text) and t not in hay)
 
     search.textEdited.connect(onSearch)
     return search
@@ -273,9 +270,8 @@ class _CommandDragger(QtCore.QObject):
                 pt = event.position().toPoint()
             except AttributeError:
                 pt = event.pos()
-            row = self.table.indexAt(pt).row()
-            cell = self.table.item(row, 0) if row >= 0 else None
-            self._name = cell.data(32) if cell else None
+            item = self.table.itemAt(pt)
+            self._name = item.data(QtCore.Qt.UserRole) if item else None
             self._press = pt
         elif et == QtCore.QEvent.MouseMove and self._name \
                 and (event.buttons() & QtCore.Qt.LeftButton):
@@ -306,28 +302,105 @@ def enableTableDrag(table):
     table.viewport().installEventFilter(dragger)
 
 
+# Role on a list item holding its shortcut, pre-rendered as bracketed tokens for
+# the delegate to paint in its own aligned column.
+SC_ROLE = QtCore.Qt.UserRole + 1
+_MOD_TOKENS = ("Ctrl", "Shift", "Alt", "Meta")
+
+
+def bracketShortcut(text):
+    """Render a Qt shortcut string as bracketed tokens for display:
+    'Ctrl+S' -> '[Ctrl] + [S]', a sequence 'G, S' -> '[G], [S]'. A literal '+'
+    key survives (its leading modifiers are consumed first, like parse_chord)."""
+    if not text:
+        return ""
+    chords = []
+    for chord in text.split(", "):
+        parts = chord.split("+")
+        tokens = []
+        i = 0
+        while i < len(parts) - 1 and parts[i] in _MOD_TOKENS:
+            tokens.append(parts[i])
+            i += 1
+        tokens.append("+".join(parts[i:]))
+        chords.append(" + ".join("[%s]" % t for t in tokens))
+    return ", ".join(chords)
+
+
+class _CommandDelegate(QtWidgets.QStyledItemDelegate):
+    """Paints a row as a fixed-width shortcut column, then the command icon and
+    name, so the shortcuts line up in a column of their own."""
+
+    SC_W = 150   # width of the shortcut column (px)
+
+    def paint(self, painter, option, index):
+        # Let the style draw the row background and selection, but not the text
+        # or icon - we place those ourselves.
+        opt = QtWidgets.QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        name = opt.text
+        opt.text = ""
+        opt.icon = QtGui.QIcon()
+        style = opt.widget.style() if opt.widget else QtWidgets.QApplication.style()
+        style.drawControl(QtWidgets.QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+
+        rect = option.rect
+        pad = 4
+        left = int(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
+        right = int(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+        painter.save()
+
+        # A faint divider on the right edge separates the wrapped columns.
+        painter.setPen(QtGui.QColor(128, 128, 128, 90))
+        painter.drawLine(rect.right(), rect.top(), rect.right(), rect.bottom())
+
+        if option.state & QtWidgets.QStyle.State_Selected:
+            painter.setPen(option.palette.highlightedText().color())
+        else:
+            painter.setPen(option.palette.text().color())
+
+        # Shortcut right-aligned in its column, so it sits next to the icon/name
+        # instead of leaving a wide gap before it.
+        sc = index.data(SC_ROLE) or ""
+        painter.drawText(QtCore.QRect(rect.left() + pad, rect.top(),
+                                      self.SC_W, rect.height()), right, sc)
+        x = rect.left() + pad + self.SC_W + pad
+
+        icon = index.data(QtCore.Qt.DecorationRole)
+        if icon is not None and not icon.isNull():
+            isz = 18
+            iy = rect.top() + (rect.height() - isz) // 2
+            icon.paint(painter, QtCore.QRect(x, iy, isz, isz))
+            x += isz + pad
+
+        name_rect = QtCore.QRect(x, rect.top(), rect.right() - x - pad, rect.height())
+        elided = opt.fontMetrics.elidedText(
+            name, QtCore.Qt.ElideRight, name_rect.width())
+        painter.drawText(name_rect, left, elided)
+        painter.restore()
+
 
 def tableWidget():
-    """Table for commands and shortcuts."""
-    table = QtGui.QTableWidget(0, 2)
-    table.verticalHeader().setVisible(False)
-    table.setHorizontalHeaderLabels(["Shortcut", "Command"])
-    table.setFixedWidth(300)
-    table.setColumnWidth(0, 100)
-    # Select whole rows so clicking a command (right column) arms it for a
-    # keyboard-captured shortcut.
-    table.setSelectionBehavior(QtGui.QAbstractItemView.SelectRows)
-    table.setSelectionMode(QtGui.QAbstractItemView.SingleSelection)
-    
-    # Qt4/Qt5
-    try:
-        table.horizontalHeader().setSectionResizeMode(0, QtGui.QHeaderView.Fixed)
-        table.horizontalHeader().setSectionResizeMode(1, QtGui.QHeaderView.Stretch)
-    except AttributeError:
-        table.horizontalHeader().setResizeMode(0, QtGui.QHeaderView.Fixed)
-        table.horizontalHeader().setResizeMode(1, QtGui.QHeaderView.Stretch)
-    table.setColumnWidth(0, 100)  # Set the desired width for the first column
-    return table
+    """List of commands, laid out in columns that flow top-to-bottom and wrap to
+    the right, so it fills the wide area under the keyboard and scrolls sideways
+    when it overflows. Each item shows the command icon, its name and (if any)
+    its shortcut; the command name is stored in Qt.UserRole for arming and drag.
+    """
+    lst = QtGui.QListWidget()
+    lst.setFlow(QtGui.QListView.TopToBottom)
+    lst.setWrapping(True)
+    lst.setResizeMode(QtGui.QListView.Adjust)
+    lst.setMovement(QtGui.QListView.Static)
+    lst.setGridSize(QtCore.QSize(360, 28))
+    lst.setIconSize(QtCore.QSize(20, 20))
+    lst.setUniformItemSizes(True)
+    lst.setItemDelegate(_CommandDelegate(lst))
+    lst.setSelectionMode(QtGui.QAbstractItemView.SingleSelection)
+    lst.setHorizontalScrollMode(QtGui.QAbstractItemView.ScrollPerPixel)
+    lst.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+    lst.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+    lst.setMinimumHeight(140)
+    return lst
 
 def workbenchCommands(workbench):
     """Command names belonging to a workbench, or None for no filter.
@@ -440,38 +513,30 @@ def updateTable(wbSelector, table, keyboard=None):
     else:  # all
         display = sorted(actionList, key=lambda x: x[0].lower())
 
+    tint = QtGui.QColor(239, 159, 39, 60)  # soft amber, session hint
+    hint = "Shortcut was reassigned to another command - set a new one."
     table.blockSignals(True)
-    table.clearContents()
-    table.setRowCount(len(display))
-    for r, entry in enumerate(display):
+    table.clear()
+    for entry in display:
         name = entry[1]
-        shortcut = QtGui.QTableWidgetItem()
-        text = actions[name].shortcut().toString()
-        if text:
-            shortcut.setText(text)
-            shortcut.setIcon(QtGui.QIcon(itemIcon(name)))
-        shortcut.setData(32, name)
+        cur = actions[name].shortcut().toString()
 
-        command = QtGui.QTableWidgetItem()
-        command.setText(actions[name].text().replace("&", ""))
-        command.setToolTip(actions[name].toolTip())
-        command.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-        if actions[name].icon():
-            command.setIcon(actions[name].icon())
-        else:
-            command.setIcon(QtGui.QIcon(":/icons/freecad"))
+        item = QtGui.QListWidgetItem()
+        item.setText(entry[0])                             # command name (display)
+        item.setData(QtCore.Qt.UserRole, name)             # objectName, arm/drag
+        item.setData(SC_ROLE, bracketShortcut(cur))        # painted shortcut column
+        item.setToolTip(actions[name].toolTip())
+        ic = actions[name].icon()
+        item.setIcon(ic if (ic and not ic.isNull())
+                     else QtGui.QIcon(":/icons/freecad"))
 
         if name in marked:
-            tint = QtGui.QColor(239, 159, 39, 60)  # soft amber, session hint
-            hint = "Shortcut was reassigned to another command - set a new one."
-            if not text:
-                shortcut.setText("(reassign)")
-            for it in (shortcut, command):
-                it.setBackground(tint)
-                it.setToolTip(hint)
+            if not cur:
+                item.setData(SC_ROLE, "(reassign)")
+            item.setBackground(tint)
+            item.setToolTip(hint)
 
-        table.setItem(r, 0, shortcut)
-        table.setItem(r, 1, command)
+        table.addItem(item)
     table.blockSignals(False)
 
 
@@ -535,7 +600,7 @@ def preferences():
     # Dialog
     dia = QtGui.QDialog(mw)
     dia.setModal(True)
-    dia.resize(1100, 600)
+    dia.resize(1200, 820)
     dia.setWindowTitle("Shortcuts")
     dia.finished.connect(onFinished)
     layout = QtGui.QVBoxLayout()
@@ -551,10 +616,7 @@ def preferences():
     btnPrint.setToolTip("Print active shortcuts to the report view")
     btnPrint.clicked.connect(printShortcuts)
 
-    loBtn = QtGui.QHBoxLayout()
-    loBtn.addWidget(btnPrint)
-    loBtn.addStretch()
-    loBtn.addWidget(btnClose)
+    # btnPrint / btnClose are placed in the right column's header row (see Layout).
 
     # wbSelector
     wbSelector = wbSelectorWidget()
@@ -574,33 +636,6 @@ def preferences():
     keyboard = kb.KeyboardLayout()
 
     # Functions and connections
-    def onItemChanged(item):
-        """Save shortcut."""
-        workbench = wbSelector.itemData(wbSelector.currentIndex())
-        command = item.data(32)
-        shortcut = item.text()
-        verify.setShortcut(QtGui.QKeySequence(shortcut))
-        shortcut = verify.shortcut().toString()
-        verify.setShortcut(QtGui.QKeySequence(""))
-        database("User", workbench, commands={command: shortcut})
-        update(workbench)
-        table.blockSignals(True)
-        if shortcut:
-            item.setText(shortcut)
-            item.setIcon(itemIcon(command))
-        elif command in scheme and scheme[command]:
-            item.setText(scheme[command])
-            item.setIcon(itemIcon(command))
-        elif command in defaults and defaults[command]:
-            item.setText(defaults[command])
-            item.setIcon(itemIcon(command))
-        else:
-            item.setText("")
-            item.setIcon(QtGui.QIcon())
-        table.blockSignals(False)
-
-    table.itemChanged.connect(onItemChanged)
-
     def onCurrentWBchanged():
         """Activate workbench on selection."""
         selected_items = wbSelector.selectedItems()
@@ -613,13 +648,6 @@ def preferences():
                 a = 2 # dummy reaction.
         updateTable(wbSelector, table, keyboard)
 
-    def on_header_click(logical_index):
-        header = table.horizontalHeaderItem(logical_index).text()
-        global __listFilter__
-        __listFilter__ = "shortcuts" if header == "Shortcut" else "all"
-        updateTable(wbSelector, table, keyboard)
-
-    table.horizontalHeader().sectionClicked.connect(on_header_click)
     wbSelector.itemSelectionChanged.connect(onCurrentWBchanged)
 
     updateTable(wbSelector, table, keyboard)
@@ -640,11 +668,7 @@ def preferences():
     btnEmpty = QtGui.QPushButton("Empty")
     btnEmpty.setToolTip("Show only commands without a shortcut")
     btnEmpty.clicked.connect(lambda: setListFilter("empty"))
-    loFilter = QtGui.QHBoxLayout()
-    loFilter.addWidget(btnAll)
-    loFilter.addWidget(btnShortcuts)
-    loFilter.addWidget(btnEmpty)
-    loFilter.addStretch()
+    # btnAll / btnShortcuts / btnEmpty are placed in the controls row (see Layout).
 
     # --- shortcut assignment via the real keyboard ------------------------
     # Select a command in the list, then press a key combination: it is checked
@@ -727,8 +751,7 @@ def preferences():
         if not items:
             disarm()
             return
-        cell = table.item(items[0].row(), 0)
-        name = cell.data(32) if cell else None
+        name = items[0].data(QtCore.Qt.UserRole)
         if not name:
             return
         armed["command"] = name
@@ -754,7 +777,6 @@ def preferences():
 
             btnClear.clicked.connect(doClear)
             assignBtnLayout.addWidget(btnClear)
-            assignBtnLayout.addStretch()
 
     def assignShortcut(command, seq_str):
         """Core assignment: assign seq_str to command, asking on a conflict.
@@ -813,7 +835,6 @@ def preferences():
         # Keep (leave as-is) left, Assign (confirm) right - like Cancel / OK.
         assignBtnLayout.addWidget(btnKeep)
         assignBtnLayout.addWidget(btnMove)
-        assignBtnLayout.addStretch()
 
     def onCapture(seq_str):
         command = armed["command"]
@@ -844,29 +865,49 @@ def preferences():
     table.itemSelectionChanged.connect(onTableSelection)
     enableTableDrag(table)
 
-    # Layout
-    loSearch = QtGui.QHBoxLayout()
-    loSearch.addWidget(QtGui.QLabel("find"))
-    loSearch.addWidget(search)
+    # Layout: a narrow workbench column on the left; one wide column on the right
+    # holding the keyboard with the function list stacked underneath it. Print and
+    # Close sit top-right, in line with the keyboard's own Layout/Shape controls.
+    keyboard.add_header_widget(btnPrint)
+    keyboard.add_header_widget(btnClose)
+
+    # Static filters + find on the left; the assignment / conflict buttons appear
+    # on the right only while a command is armed.
+    loControls = QtGui.QHBoxLayout()
+    loControls.addWidget(btnAll)
+    loControls.addWidget(btnShortcuts)
+    loControls.addWidget(btnEmpty)
+    loControls.addSpacing(10)
+    loControls.addWidget(QtGui.QLabel("find"))
+    # A search only needs a few letters: cap the width so the field yields the
+    # rest of the row to the stretch, and shrinks first when space runs out.
+    search.setMaximumWidth(220)
+    loControls.addWidget(search)
+    loControls.addStretch()
+    loControls.addWidget(assignButtons)
 
     loRight = QtGui.QVBoxLayout()
-    loRight.addLayout(loFilter)
-    loRight.addLayout(loSearch)
+    loRight.addWidget(keyboard)
+    loRight.addWidget(assignLabel)
+    loRight.addLayout(loControls)
     loRight.addWidget(table)
-    loRight.addLayout(loBtn)
-
-    loMid = QtGui.QVBoxLayout()
-    loMid.addWidget(keyboard)
-    loMid.addWidget(assignLabel)
-    loMid.addWidget(assignButtons)
-    loMid.addStretch()
 
     loTop = QtGui.QHBoxLayout()
     loTop.addWidget(wbSelector)
-    loTop.insertLayout(1,loMid)
-    loTop.insertLayout(2,loRight)
+    loTop.addLayout(loRight)
 
     layout.insertLayout(0, loTop)
+
+    # Size the keyboard once to fill the width a maximised dialog gives it: the
+    # widest shape (with numpad) reaches the right edge, narrower shapes leave
+    # space free on the right. Fixed afterwards - the dialog opens maximised and
+    # is not meant to be resized during use.
+    screen = mw.screen() if hasattr(mw, "screen") else None
+    if screen is None:
+        screen = QtWidgets.QApplication.primaryScreen()
+    if screen is not None:
+        # 200 px left column + room for margins, spacing and a scrollbar.
+        keyboard.fit_to_width(screen.availableGeometry().width() - 280)
 
     btnClose.setDefault(True)
     btnClose.setFocus()
@@ -877,7 +918,7 @@ def preferences():
 def onPreferences():
     """Open the preferences dialog."""
     dia = preferences()
-    dia.show()
+    dia.showMaximized()
 
 
 def accessoriesMenu():

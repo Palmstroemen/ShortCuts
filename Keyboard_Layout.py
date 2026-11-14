@@ -175,7 +175,7 @@ class KeyboardLayout(QtWidgets.QWidget):
         self.reset_button.setToolTip("Clear the focus and show all shortcuts")
         self.reset_button.clicked.connect(self._reset_focus)
 
-        controls = QtWidgets.QHBoxLayout()
+        self._controls = controls = QtWidgets.QHBoxLayout()
         controls.addWidget(QtWidgets.QLabel("Layout:"))
         controls.addWidget(self.layout_selector)
         controls.addSpacing(10)
@@ -198,14 +198,17 @@ class KeyboardLayout(QtWidgets.QWidget):
         # Board: keys are positioned absolutely on this container; it also
         # receives commands dragged from the shortcut list onto a key.
         self.board = _DropBoard(self)
+        # Key geometry is instance state so fit_to_width() can scale the whole
+        # board to the available width once, at open; fonts and icons scale with
+        # the key size so larger keys stay legible.
+        self.keysize = KEYSIZE
+        self.cell = CELL
+        self.font_pt = 8
+        self.icon_px = 16
         # min-width/height: 0 so a theme's min-width (FreeCAD sets one) can't
         # override setFixedSize and make keys overlap; padding/margin 0 and a
         # small font keep short caps centered and readable.
-        self._base_key_css = (
-            "QPushButton { min-width: 0px; min-height: 0px;"
-            " padding: 0px; margin: 0px; font-size: 8pt; }"
-        )
-        self.board.setStyleSheet(self._base_key_css)
+        self.board.setStyleSheet(self._base_key_css())
         outer.addWidget(self.board)
         outer.addStretch()
 
@@ -294,6 +297,42 @@ class KeyboardLayout(QtWidgets.QWidget):
         """Drop any half-recorded sequence (cancel or disarm)."""
         self.capture_timer.stop()
         self.capture_chords = []
+
+    def add_header_widget(self, widget):
+        """Place a widget at the right end of the top control row.
+
+        The row ends with a stretch, so widgets added here sit right-aligned,
+        in line with the Layout / Shape / Overview controls.
+        """
+        self._controls.addWidget(widget)
+
+    def _base_key_css(self):
+        return ("QPushButton { min-width: 0px; min-height: 0px;"
+                " padding: 0px; margin: 0px; font-size: %dpt; }" % self.font_pt)
+
+    def fit_to_width(self, avail_px):
+        """Scale the key size once so the widest shape (the one with a numpad)
+        fills avail_px, then redraw; fonts and icons scale with the keys.
+
+        Meant to be called once, at open. The size then stays fixed - the dialog
+        is maximised and not resized during use. Narrower shapes (no numpad) keep
+        this key size and simply leave space free on the right.
+        """
+        units = 0.0
+        for tmpl in Keyboard_Templates.TEMPLATES.values():
+            for key in tmpl["keys"]:
+                units = max(units, key["x"] + key["w"])
+        if units <= 0 or avail_px <= 0:
+            return
+        cell = (avail_px + GAP) / units
+        cell = max(float(CELL), min(cell, 72.0))  # never below the compact default
+        self.cell = cell
+        self.keysize = cell - GAP
+        scale = cell / CELL
+        self.font_pt = max(8, int(round(8 * scale)))
+        self.icon_px = max(16, int(round(16 * scale)))
+        self.board.setStyleSheet(self._base_key_css())
+        self._rebuild()
 
     def set_capture_handler(self, handler):
         """Register a callback(shortcut_string | None) for captured combos."""
@@ -464,10 +503,11 @@ class KeyboardLayout(QtWidgets.QWidget):
             button = QtWidgets.QPushButton(label, self.board)
             # setFixedSize (not setGeometry) so a theme's min-width/padding can't
             # enlarge the cap and eat the gaps.
-            bw = int(round(key["w"] * CELL - GAP))
-            bh = int(round(key["h"] * CELL - GAP))
+            bw = int(round(key["w"] * self.cell - GAP))
+            bh = int(round(key["h"] * self.cell - GAP))
             button.setFixedSize(bw, bh)
-            button.move(int(round(key["x"] * CELL)), int(round(key["y"] * CELL)))
+            button.move(int(round(key["x"] * self.cell)),
+                        int(round(key["y"] * self.cell)))
             button.setProperty("kbref", ref)
             button.setProperty("kblabel", label)
             button.installEventFilter(self._key_dragger)
@@ -481,8 +521,8 @@ class KeyboardLayout(QtWidgets.QWidget):
         self._add_legend()
 
         self.board.setFixedSize(
-            int(round(max_x * CELL - GAP)),
-            int(round(max_y * CELL - GAP)),
+            int(round(max_x * self.cell - GAP)),
+            int(round(max_y * self.cell - GAP)),
         )
         self.reset_button.setEnabled(mode != "overview")
 
@@ -492,7 +532,8 @@ class KeyboardLayout(QtWidgets.QWidget):
         # and the neighbouring lists keep their size.
         self.updateGeometry()
         window = self.window()
-        if window is not None and window is not self:
+        if (window is not None and window is not self
+                and not window.isMaximized()):
             keep_height = window.height()
             window.adjustSize()
             window.resize(window.width(), keep_height)
@@ -590,7 +631,7 @@ class KeyboardLayout(QtWidgets.QWidget):
             if icon is not None and not icon.isNull():
                 button.setText("")
                 button.setIcon(icon)
-                button.setIconSize(QtCore.QSize(16, 16))
+                button.setIconSize(QtCore.QSize(self.icon_px, self.icon_px))
             button.setToolTip(entry.get("text", ""))
             return
 
@@ -598,7 +639,7 @@ class KeyboardLayout(QtWidgets.QWidget):
         button.setStyleSheet(
             "QPushButton{color:#9a9a9a;border:0.5px solid #c8c8c8;"
             "background:transparent;min-width:0;min-height:0;padding:0;"
-            "font-size:8pt;}")
+            "font-size:%dpt;}" % self.font_pt)
 
     def _mods_color(self):
         for family in Shortcut_Model.FAMILY_ORDER:
@@ -609,13 +650,14 @@ class KeyboardLayout(QtWidgets.QWidget):
     def _fill(self, button, color, text="white"):
         button.setStyleSheet(
             "QPushButton{background:%s;color:%s;border:0.5px solid %s;"
-            "min-width:0;min-height:0;padding:0;font-size:8pt;}"
-            % (color, text, color))
+            "min-width:0;min-height:0;padding:0;font-size:%dpt;}"
+            % (color, text, color, self.font_pt))
 
     def _frame(self, button, color):
         button.setStyleSheet(
             "QPushButton{border:2px solid %s;background:transparent;"
-            "min-width:0;min-height:0;padding:0;font-size:8pt;}" % color)
+            "min-width:0;min-height:0;padding:0;font-size:%dpt;}"
+            % (color, self.font_pt))
 
     def _add_legend(self):
         """A key-shaped legend in the free space above the navigation cluster:
@@ -624,19 +666,20 @@ class KeyboardLayout(QtWidgets.QWidget):
         matching colours above and below - so the corner scheme reads at a
         glance (top-left Shift / top-right direct / bottom-left Ctrl /
         bottom-right Alt)."""
-        kx = Keyboard_Templates.NAV_X * CELL
-        kw = int(round(Keyboard_Templates.NAV_W * CELL - GAP))
+        scale = self.cell / CELL      # the legend grows with the keyboard
+        kx = Keyboard_Templates.NAV_X * self.cell
+        kw = int(round(Keyboard_Templates.NAV_W * self.cell - GAP))
         kh = kw                       # square key
-        base_y = int(round(Keyboard_Templates.Y_FUNC * CELL))
-        lh = 16                       # label row height
+        base_y = int(round(Keyboard_Templates.Y_FUNC * self.cell))
+        lh = int(round(16 * scale))   # label row height
         key_y = base_y + lh + 1
 
         # The sample key - a plain QPushButton keeps the theme's key background.
-        # The board stylesheet pins QPushButton font-size to 8pt, so the big cap
-        # must come from the button's own stylesheet; scale it to the key so it
-        # stays proportional to the small keys (~1/3 of the key height).
+        # The board stylesheet pins QPushButton font-size, so the big cap must
+        # come from the button's own stylesheet; scale it to the key so it stays
+        # proportional to the small keys (~1/3 of the key height).
         key = QtWidgets.QPushButton("A", self.board)
-        small_key_h = CELL - GAP
+        small_key_h = self.cell - GAP
         font_pt = max(8, int(round(8.0 * kh / small_key_h)))
         key.setStyleSheet(
             "QPushButton{font-size:%dpt;padding:0;min-width:0;min-height:0;}"
@@ -644,7 +687,7 @@ class KeyboardLayout(QtWidgets.QWidget):
         key.setFocusPolicy(QtCore.Qt.NoFocus)
         key.setFixedSize(kw, kh)
         key.move(int(round(kx)), key_y)
-        fld = 15
+        fld = int(round(15 * scale))
         for family, corner in (("shift", "tl"), ("plain", "tr"),
                                ("ctrl", "bl"), ("alt", "br")):
             swatch = QtWidgets.QFrame(key)
@@ -674,8 +717,9 @@ class KeyboardLayout(QtWidgets.QWidget):
             lbl = QtWidgets.QLabel(text, self.board)
             lbl.setAlignment(align)
             lbl.setStyleSheet(
-                "QLabel{color:%s;font-size:8pt;background:transparent;}"
-                % Shortcut_Model.FAMILY_COLORS[family])
+                "QLabel{color:%s;font-size:%dpt;background:transparent;}"
+                % (Shortcut_Model.FAMILY_COLORS[family],
+                   max(8, int(round(8 * scale)))))
             lbl.setFixedSize(lw, lh)
             lbl.move(lx, ly)
             lbl.show()
@@ -683,9 +727,10 @@ class KeyboardLayout(QtWidgets.QWidget):
     def _add_pip(self, button, corner, bw, bh, color):
         pip = QtWidgets.QFrame(button)
         pip.setStyleSheet("background:%s;border-radius:2px;" % color)
-        pip.setFixedSize(_PIP, _PIP)
-        x = 2 if corner in ("tl", "bl") else bw - _PIP - 2
-        y = 2 if corner in ("tl", "tr") else bh - _PIP - 2
+        size = max(_PIP, int(round(_PIP * self.cell / CELL)))
+        pip.setFixedSize(size, size)
+        x = 2 if corner in ("tl", "bl") else bw - size - 2
+        y = 2 if corner in ("tl", "tr") else bh - size - 2
         pip.move(x, y)
         pip.show()
 
