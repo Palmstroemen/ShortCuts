@@ -365,11 +365,16 @@ def updateTable(wbSelector, table, keyboard=None):
             })
         keyboard.set_shortcuts(kb_entries, dim_global=(mode == "wb"))
 
+    # Commands that lost their shortcut to another command this session.
+    marked = getattr(table, "_marked", None) or set()
+
     # Which rows the list-filter buttons show: all, only those with a shortcut,
-    # or only the empty ones (so a shortcut can be assigned to them).
+    # or only the empty ones (so a shortcut can be assigned to them). A command
+    # that just lost its shortcut stays visible in the "shortcuts" view so the
+    # user can spot it and reassign one.
     if __listFilter__ == "shortcuts":
-        display = [a for a in actionList if a[2]]
-        display.sort(key=lambda x: x[2])
+        display = [a for a in actionList if a[2] or a[1] in marked]
+        display.sort(key=lambda x: (not (x[1] in marked and not x[2]), x[2]))
     elif __listFilter__ == "empty":
         display = [a for a in actionList if not a[2]]
         display.sort(key=lambda x: x[0].lower())
@@ -396,6 +401,15 @@ def updateTable(wbSelector, table, keyboard=None):
             command.setIcon(actions[name].icon())
         else:
             command.setIcon(QtGui.QIcon(":/icons/freecad"))
+
+        if name in marked:
+            tint = QtGui.QColor(239, 159, 39, 60)  # soft amber, session hint
+            hint = "Shortcut was reassigned to another command - set a new one."
+            if not text:
+                shortcut.setText("(reassign)")
+            for it in (shortcut, command):
+                it.setBackground(tint)
+                it.setToolTip(hint)
 
         table.setItem(r, 0, shortcut)
         table.setItem(r, 1, command)
@@ -490,6 +504,9 @@ def preferences():
 
     # Table widget
     table = tableWidget()
+    # Commands that lost their shortcut to another command this session; the list
+    # highlights them as "reassign" until the window is closed (then this resets).
+    table._marked = set()
 
     # Search
     search = searchLine(table)
@@ -620,15 +637,31 @@ def preferences():
 
     def applyAssignments(cmdmap):
         wbname = targetWorkbench()
-        database("User", wbname, commands=cmdmap)
-        update(wbname)
-        updateTable(wbSelector, table, keyboard)
+        try:
+            database("User", wbname, commands=cmdmap)
+            update(wbname)
+            updateTable(wbSelector, table, keyboard)
+        except Exception:
+            import traceback
+            App.Console.PrintError(
+                "[ShortCuts] applyAssignments failed:\n%s\n"
+                % traceback.format_exc())
 
     def disarm():
         armed["command"] = None
         keyboard.set_armed(False)
         clearAssignButtons()
         assignLabel.setText("Select a command, then press a key combination.")
+        # Drop the row selection so clicking the SAME command again re-arms it
+        # (an unchanged selection would emit no signal). Block signals so this
+        # does not re-enter onTableSelection.
+        table.blockSignals(True)
+        table.clearSelection()
+        table.blockSignals(False)
+
+    def commandIcon(name):
+        ic = actions[name].icon() if name in actions else None
+        return ic if (ic and not ic.isNull()) else None
 
     def onTableSelection():
         items = table.selectedItems()
@@ -644,9 +677,13 @@ def preferences():
         clearAssignButtons()
         assignLabel.setText(
             "Press a key combination for '%s' (Esc to cancel)." % commandText(name))
+        App.Console.PrintMessage("[ShortCuts] armed: %s\n" % name)
         current = actions[name].shortcut().toString() if name in actions else ""
         if current:
             btnClear = QtGui.QPushButton("Clear %s" % current)
+            ic = commandIcon(name)
+            if ic:
+                btnClear.setIcon(ic)
 
             def doClear(_=False, cmd=name):
                 applyAssignments({cmd: ""})
@@ -662,6 +699,8 @@ def preferences():
 
     def onCapture(seq_str):
         command = armed["command"]
+        App.Console.PrintMessage(
+            "[ShortCuts] capture: seq=%r command=%s\n" % (seq_str, command))
         if command is None:
             return
         if seq_str is None:            # Esc cancelled
@@ -669,12 +708,20 @@ def preferences():
             return
         norm = normalize(seq_str)
         if not norm:
+            App.Console.PrintMessage("[ShortCuts] normalize empty, abort\n")
             return
         holders = [n for n in scopeNames()
                    if n != command
                    and normalize(actions[n].shortcut().toString()) == norm]
+        App.Console.PrintMessage(
+            "[ShortCuts] norm=%s holders=%s\n" % (norm, holders))
         if not holders:
+            table._marked.discard(command)
             applyAssignments({command: norm})
+            App.Console.PrintMessage(
+                "[ShortCuts] applied -> %s now %r\n"
+                % (command, actions[command].shortcut().toString()
+                   if command in actions else "?"))
             armed["command"] = None
             keyboard.set_armed(False)
             clearAssignButtons()
@@ -687,8 +734,16 @@ def preferences():
         clearAssignButtons()
         btnMove = QtGui.QPushButton("Assign to '%s'" % commandText(command))
         btnKeep = QtGui.QPushButton("Keep on '%s'" % commandText(holder))
+        icMove = commandIcon(command)
+        if icMove:
+            btnMove.setIcon(icMove)
+        icKeep = commandIcon(holder)
+        if icKeep:
+            btnKeep.setIcon(icKeep)
 
         def doMove():
+            table._marked.add(holder)
+            table._marked.discard(command)
             applyAssignments({holder: "", command: norm})
             armed["command"] = None
             keyboard.set_armed(False)
@@ -699,8 +754,9 @@ def preferences():
 
         btnMove.clicked.connect(doMove)
         btnKeep.clicked.connect(disarm)
-        assignBtnLayout.addWidget(btnMove)
+        # Keep (leave as-is) left, Assign (confirm) right - like Cancel / OK.
         assignBtnLayout.addWidget(btnKeep)
+        assignBtnLayout.addWidget(btnMove)
         assignBtnLayout.addStretch()
 
     def onCaptureProgress(partial):
@@ -714,9 +770,13 @@ def preferences():
     table.itemSelectionChanged.connect(onTableSelection)
 
     # Layout
+    loSearch = QtGui.QHBoxLayout()
+    loSearch.addWidget(QtGui.QLabel("find"))
+    loSearch.addWidget(search)
+
     loRight = QtGui.QVBoxLayout()
     loRight.addLayout(loFilter)
-    loRight.addWidget(search)
+    loRight.addLayout(loSearch)
     loRight.addWidget(table)
     loRight.addLayout(loBtn)
 
