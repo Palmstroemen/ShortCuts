@@ -248,6 +248,64 @@ def searchLine(table):
     return search
 
 
+# Same format the keyboard's drop target listens for (Keyboard_Layout).
+MIME_COMMAND = "application/x-shortcuts-command"
+
+
+class _CommandDragger(QtCore.QObject):
+    """Starts a drag carrying a command name when a table row is dragged out.
+
+    Left-press records the row's command; once the pointer moves past the drag
+    threshold a QDrag with that command is started, to be dropped on a key.
+    """
+
+    def __init__(self, table):
+        super().__init__(table)
+        self.table = table
+        self._name = None
+        self._press = None
+
+    def eventFilter(self, obj, event):
+        et = event.type()
+        if et == QtCore.QEvent.MouseButtonPress \
+                and event.button() == QtCore.Qt.LeftButton:
+            try:
+                pt = event.position().toPoint()
+            except AttributeError:
+                pt = event.pos()
+            row = self.table.indexAt(pt).row()
+            cell = self.table.item(row, 0) if row >= 0 else None
+            self._name = cell.data(32) if cell else None
+            self._press = pt
+        elif et == QtCore.QEvent.MouseMove and self._name \
+                and (event.buttons() & QtCore.Qt.LeftButton):
+            try:
+                pt = event.position().toPoint()
+            except AttributeError:
+                pt = event.pos()
+            if (pt - self._press).manhattanLength() \
+                    >= QtWidgets.QApplication.startDragDistance():
+                name = self._name
+                self._name = None
+                drag = QtGui.QDrag(self.table)
+                mime = QtCore.QMimeData()
+                mime.setData(MIME_COMMAND,
+                             QtCore.QByteArray(name.encode("utf-8")))
+                drag.setMimeData(mime)
+                drag.exec(QtCore.Qt.CopyAction)
+                return True
+        elif et == QtCore.QEvent.MouseButtonRelease:
+            self._name = None
+        return False
+
+
+def enableTableDrag(table):
+    """Let a command be dragged out of the table onto a keyboard key."""
+    dragger = _CommandDragger(table)
+    table._dragger = dragger  # keep a reference alive
+    table.viewport().installEventFilter(dragger)
+
+
 
 def tableWidget():
     """Table for commands and shortcuts."""
@@ -697,15 +755,12 @@ def preferences():
             assignBtnLayout.addWidget(btnClear)
             assignBtnLayout.addStretch()
 
-    def onCapture(seq_str):
-        command = armed["command"]
-        App.Console.PrintMessage(
-            "[ShortCuts] capture: seq=%r command=%s\n" % (seq_str, command))
-        if command is None:
-            return
-        if seq_str is None:            # Esc cancelled
-            disarm()
-            return
+    def assignShortcut(command, seq_str):
+        """Core assignment: assign seq_str to command, asking on a conflict.
+
+        Shared by key-combination capture and drag&drop. command must be a real
+        command; seq_str a Qt key-sequence string.
+        """
         norm = normalize(seq_str)
         if not norm:
             App.Console.PrintMessage("[ShortCuts] normalize empty, abort\n")
@@ -759,6 +814,23 @@ def preferences():
         assignBtnLayout.addWidget(btnMove)
         assignBtnLayout.addStretch()
 
+    def onCapture(seq_str):
+        command = armed["command"]
+        App.Console.PrintMessage(
+            "[ShortCuts] capture: seq=%r command=%s\n" % (seq_str, command))
+        if command is None:
+            return
+        if seq_str is None:            # Esc cancelled
+            disarm()
+            return
+        assignShortcut(command, seq_str)
+
+    def onDrop(command, seq_str):
+        App.Console.PrintMessage(
+            "[ShortCuts] drop: cmd=%s seq=%r\n" % (command, seq_str))
+        if command in actions:
+            assignShortcut(command, seq_str)
+
     def onCaptureProgress(partial):
         if armed["command"] is None:
             return
@@ -767,7 +839,9 @@ def preferences():
 
     keyboard.set_capture_handler(onCapture)
     keyboard.set_capture_progress(onCaptureProgress)
+    keyboard.set_drop_handler(onDrop)
     table.itemSelectionChanged.connect(onTableSelection)
+    enableTableDrag(table)
 
     # Layout
     loSearch = QtGui.QHBoxLayout()

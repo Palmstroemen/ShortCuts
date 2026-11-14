@@ -36,6 +36,51 @@ _PIP = 7
 # Static key labels that act as modifier toggles, mapped to their family.
 _MOD_LABELS = {"Ctrl": "ctrl", "Shift": "shift", "Alt": "alt"}
 
+# Modifier family -> Qt key-sequence token, in canonical order.
+_FAMILY_TOKEN = [("ctrl", "Ctrl"), ("shift", "Shift"),
+                 ("alt", "Alt"), ("meta", "Meta")]
+
+# Drag payload: a command name dragged from the shortcut list onto a key.
+MIME_COMMAND = "application/x-shortcuts-command"
+
+
+class _DropBoard(QtWidgets.QWidget):
+    """The key container, able to receive a command dragged onto a key."""
+
+    def __init__(self, owner):
+        super().__init__()
+        self._owner = owner
+        self.setAcceptDrops(True)
+
+    def _ok(self, event):
+        return (self._owner.drop_handler is not None
+                and event.mimeData().hasFormat(MIME_COMMAND))
+
+    def dragEnterEvent(self, event):
+        if self._ok(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self._ok(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if not self._ok(event):
+            event.ignore()
+            return
+        raw = bytes(event.mimeData().data(MIME_COMMAND))
+        command = raw.decode("utf-8", "replace")
+        try:
+            pos = event.position().toPoint()   # Qt6
+        except AttributeError:
+            pos = event.pos()
+        self._owner._handle_drop(command, pos)
+        event.acceptProposedAction()
+
 
 class KeyboardLayout(QtWidgets.QWidget):
     def __init__(self, manual_override=None):
@@ -52,6 +97,7 @@ class KeyboardLayout(QtWidgets.QWidget):
         self.capture_armed = False # real keys record a combo instead of toggling
         self.capture_handler = None
         self.capture_progress = None  # optional callback(partial_string)
+        self.drop_handler = None      # callback(command, seq_string) for drag&drop
         self.capture_chords = []      # chords collected for the current sequence
         # A plain (modifier-less) chord may start a key sequence ("G, S"), so we
         # wait briefly for a following chord before finalising; a modifier chord
@@ -103,8 +149,9 @@ class KeyboardLayout(QtWidgets.QWidget):
         outer.addWidget(separator)
         outer.addSpacing(8)
 
-        # Board: keys are positioned absolutely on this container.
-        self.board = QtWidgets.QWidget()
+        # Board: keys are positioned absolutely on this container; it also
+        # receives commands dragged from the shortcut list onto a key.
+        self.board = _DropBoard(self)
         # min-width/height: 0 so a theme's min-width (FreeCAD sets one) can't
         # override setFixedSize and make keys overlap; padding/margin 0 and a
         # small font keep short caps centered and readable.
@@ -210,6 +257,31 @@ class KeyboardLayout(QtWidgets.QWidget):
         """Register a callback(partial_string) shown while a sequence records."""
         self.capture_progress = callback
 
+    def set_drop_handler(self, handler):
+        """Register a callback(command, seq_string) for a command dropped on a key."""
+        self.drop_handler = handler
+
+    def _compose_seq(self, label):
+        """Build a key-sequence string from the active modifier layer + a key cap."""
+        tokens = [token for family, token in _FAMILY_TOKEN
+                  if family in self.active_mods]
+        tokens.append(label)
+        return "+".join(tokens)
+
+    def _handle_drop(self, command, pos):
+        """A command was dropped at board position pos; assign it to that key."""
+        if self.drop_handler is None:
+            return
+        btn = self.board.childAt(pos)
+        while btn is not None and not btn.property("kbref"):
+            btn = btn.parentWidget()
+        if btn is None:
+            return
+        label = btn.property("kblabel")
+        if not label or label in _MOD_LABELS:
+            return  # dropping on a modifier key (or a non-key) does nothing yet
+        self.drop_handler(command, self._compose_seq(label))
+
     def set_armed(self, armed):
         """Arm/disarm real-keyboard capture (vs. the modifier-toggle mode)."""
         self.capture_armed = bool(armed)
@@ -300,6 +372,8 @@ class KeyboardLayout(QtWidgets.QWidget):
             bh = int(round(key["h"] * CELL - GAP))
             button.setFixedSize(bw, bh)
             button.move(int(round(key["x"] * CELL)), int(round(key["y"] * CELL)))
+            button.setProperty("kbref", ref)
+            button.setProperty("kblabel", label)
 
             self._style_key(button, ref, label, bw, bh, mode, targets, focus_entry)
             button.show()
