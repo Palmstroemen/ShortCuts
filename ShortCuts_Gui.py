@@ -256,6 +256,10 @@ def tableWidget():
     table.setHorizontalHeaderLabels(["Shortcut", "Command"])
     table.setFixedWidth(300)
     table.setColumnWidth(0, 100)
+    # Select whole rows so clicking a command (right column) arms it for a
+    # keyboard-captured shortcut.
+    table.setSelectionBehavior(QtGui.QAbstractItemView.SelectRows)
+    table.setSelectionMode(QtGui.QAbstractItemView.SingleSelection)
     
     # Qt4/Qt5
     try:
@@ -387,7 +391,7 @@ def updateTable(wbSelector, table, keyboard=None):
         command = QtGui.QTableWidgetItem()
         command.setText(actions[name].text().replace("&", ""))
         command.setToolTip(actions[name].toolTip())
-        command.setFlags(QtCore.Qt.ItemIsEnabled)
+        command.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
         if actions[name].icon():
             command.setIcon(actions[name].icon())
         else:
@@ -566,6 +570,127 @@ def preferences():
     loFilter.addWidget(btnEmpty)
     loFilter.addStretch()
 
+    # --- shortcut assignment via the real keyboard ------------------------
+    # Select a command in the list, then press a key combination: it is checked
+    # against this workbench and the globals, and on a clash the user chooses
+    # which command keeps it.
+    armed = {"command": None}
+
+    assignLabel = QtGui.QLabel("Select a command, then press a key combination.")
+    assignLabel.setWordWrap(True)
+    assignButtons = QtGui.QWidget()
+    assignBtnLayout = QtGui.QHBoxLayout(assignButtons)
+    assignBtnLayout.setContentsMargins(0, 0, 0, 0)
+
+    def clearAssignButtons():
+        while assignBtnLayout.count():
+            it = assignBtnLayout.takeAt(0)
+            w = it.widget()
+            if w:
+                w.setParent(None)
+                w.deleteLater()
+
+    def commandText(name):
+        return actions[name].text().replace("&", "") if name in actions else name
+
+    def normalize(text):
+        verify.setShortcut(QtGui.QKeySequence(text))
+        norm = verify.shortcut().toString()
+        verify.setShortcut(QtGui.QKeySequence(""))
+        return norm
+
+    def targetWorkbench():
+        sel = wbSelector.selectedItems()
+        wbname = sel[0].data(QtCore.Qt.UserRole) if sel else None
+        if wbname in (None, "", "AllWorkbenches"):
+            return "GlobalShortcuts"
+        return wbname
+
+    def scopeNames():
+        """Commands a new shortcut could clash with: this workbench + globals."""
+        sel = wbSelector.selectedItems()
+        wbname = sel[0].data(QtCore.Qt.UserRole) if sel else None
+        names = set(actions.keys())
+        if wbname == "GlobalShortcuts":
+            return {n for n in names if n.startswith("Std_")}
+        if wbname in (None, "", "AllWorkbenches"):
+            return names
+        cmds = workbenchCommands(wbname) or set()
+        return {n for n in names if n.startswith("Std_")} | (cmds & names)
+
+    def applyAssignments(cmdmap):
+        wbname = targetWorkbench()
+        database("User", wbname, commands=cmdmap)
+        update(wbname)
+        updateTable(wbSelector, table, keyboard)
+
+    def disarm():
+        armed["command"] = None
+        keyboard.set_armed(False)
+        clearAssignButtons()
+        assignLabel.setText("Select a command, then press a key combination.")
+
+    def onTableSelection():
+        items = table.selectedItems()
+        if not items:
+            disarm()
+            return
+        cell = table.item(items[0].row(), 0)
+        name = cell.data(32) if cell else None
+        if not name:
+            return
+        armed["command"] = name
+        keyboard.set_armed(True)
+        clearAssignButtons()
+        assignLabel.setText(
+            "Press a key combination for '%s' (Esc to cancel)." % commandText(name))
+
+    def onCapture(seq_str):
+        command = armed["command"]
+        if command is None:
+            return
+        if seq_str is None:            # Esc cancelled
+            disarm()
+            return
+        norm = normalize(seq_str)
+        if not norm:
+            return
+        holders = [n for n in scopeNames()
+                   if n != command
+                   and normalize(actions[n].shortcut().toString()) == norm]
+        if not holders:
+            applyAssignments({command: norm})
+            armed["command"] = None
+            keyboard.set_armed(False)
+            clearAssignButtons()
+            assignLabel.setText("Assigned %s to '%s'." % (norm, commandText(command)))
+            return
+        holder = holders[0]
+        assignLabel.setText(
+            "%s is already used by '%s'. Keep it there, or move it to '%s'?"
+            % (norm, commandText(holder), commandText(command)))
+        clearAssignButtons()
+        btnMove = QtGui.QPushButton("Assign to '%s'" % commandText(command))
+        btnKeep = QtGui.QPushButton("Keep on '%s'" % commandText(holder))
+
+        def doMove():
+            applyAssignments({holder: "", command: norm})
+            armed["command"] = None
+            keyboard.set_armed(False)
+            clearAssignButtons()
+            assignLabel.setText(
+                "Moved %s to '%s'. '%s' now has no shortcut - reassign it if needed."
+                % (norm, commandText(command), commandText(holder)))
+
+        btnMove.clicked.connect(doMove)
+        btnKeep.clicked.connect(disarm)
+        assignBtnLayout.addWidget(btnMove)
+        assignBtnLayout.addWidget(btnKeep)
+        assignBtnLayout.addStretch()
+
+    keyboard.set_capture_handler(onCapture)
+    table.itemSelectionChanged.connect(onTableSelection)
+
     # Layout
     loRight = QtGui.QVBoxLayout()
     loRight.addLayout(loFilter)
@@ -575,6 +700,8 @@ def preferences():
 
     loMid = QtGui.QVBoxLayout()
     loMid.addWidget(keyboard)
+    loMid.addWidget(assignLabel)
+    loMid.addWidget(assignButtons)
     loMid.addStretch()
 
     loTop = QtGui.QHBoxLayout()

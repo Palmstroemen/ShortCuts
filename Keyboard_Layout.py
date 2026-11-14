@@ -49,6 +49,8 @@ class KeyboardLayout(QtWidgets.QWidget):
         self.model = None
         self.active_mods = set()   # focused modifier families
         self.active_prefix = None  # focused sequence-prefix ref
+        self.capture_armed = False # real keys record a combo instead of toggling
+        self.capture_handler = None
 
         outer = QtWidgets.QVBoxLayout()
         self.setLayout(outer)
@@ -115,29 +117,58 @@ class KeyboardLayout(QtWidgets.QWidget):
 
         self._rebuild()
 
-    # --- real-keyboard toggle ---------------------------------------------
-
-    _REAL_MOD_KEYS = None  # built lazily (needs QtCore.Qt)
+    # --- real keyboard: toggle layers, or capture a combo for assignment ---
 
     def eventFilter(self, obj, event):
-        """Toggle a modifier layer when the physical modifier key is pressed."""
-        if event.type() == QtCore.QEvent.KeyPress and not event.isAutoRepeat():
-            if KeyboardLayout._REAL_MOD_KEYS is None:
-                KeyboardLayout._REAL_MOD_KEYS = {
-                    QtCore.Qt.Key_Control: "ctrl",
-                    QtCore.Qt.Key_Shift: "shift",
-                    QtCore.Qt.Key_Alt: "alt",
-                }
-            family = KeyboardLayout._REAL_MOD_KEYS.get(event.key())
-            if family is not None:
-                # Don't hijack a modifier typed into a text field (e.g. when
-                # recording a shortcut in the table or using the search box).
-                focus = QtWidgets.QApplication.focusWidget()
-                if not isinstance(focus, QtWidgets.QLineEdit):
-                    self._toggle_mod(family)
+        """React to physical key presses.
+
+        Normally the Ctrl/Shift/Alt keys toggle the focus layers. When armed for
+        capture (a command is selected for assignment), the next full key
+        combination is reported to the capture handler instead, and Esc cancels.
+        """
+        if event.type() != QtCore.QEvent.KeyPress or event.isAutoRepeat():
+            return False
+        # Don't interfere with text entry (search box, shortcut cell editor).
+        if isinstance(QtWidgets.QApplication.focusWidget(), QtWidgets.QLineEdit):
+            return False
+
+        key = event.key()
+        bare_mods = (QtCore.Qt.Key_Control, QtCore.Qt.Key_Shift,
+                     QtCore.Qt.Key_Alt, QtCore.Qt.Key_Meta, QtCore.Qt.Key_AltGr)
+
+        if self.capture_armed and self.capture_handler is not None:
+            if key in bare_mods:
+                return False  # wait for the non-modifier key, keep modifiers held
+            if key == QtCore.Qt.Key_Escape:
+                self.capture_handler(None)
+                return True
+            seq = None
+            try:
+                seq = QtGui.QKeySequence(event.keyCombination())
+            except Exception:
+                try:
+                    seq = QtGui.QKeySequence(int(event.modifiers()) | int(key))
+                except Exception:
+                    seq = QtGui.QKeySequence(
+                        int(event.modifiers().value) | int(key))
+            self.capture_handler(seq.toString())
+            return True
+
+        family = {QtCore.Qt.Key_Control: "ctrl", QtCore.Qt.Key_Shift: "shift",
+                  QtCore.Qt.Key_Alt: "alt"}.get(key)
+        if family is not None:
+            self._toggle_mod(family)
         return False
 
     # --- public API --------------------------------------------------------
+
+    def set_capture_handler(self, handler):
+        """Register a callback(shortcut_string | None) for captured combos."""
+        self.capture_handler = handler
+
+    def set_armed(self, armed):
+        """Arm/disarm real-keyboard capture (vs. the modifier-toggle mode)."""
+        self.capture_armed = bool(armed)
 
     def set_shortcuts(self, entries, dim_global=False):
         """Supply the active workbench's shortcuts and redraw the overlay.
