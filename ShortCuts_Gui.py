@@ -644,6 +644,21 @@ def preferences():
         clearAssignButtons()
         assignLabel.setText(
             "Press a key combination for '%s' (Esc to cancel)." % commandText(name))
+        current = actions[name].shortcut().toString() if name in actions else ""
+        if current:
+            btnClear = QtGui.QPushButton("Clear %s" % current)
+
+            def doClear(_=False, cmd=name):
+                applyAssignments({cmd: ""})
+                armed["command"] = None
+                keyboard.set_armed(False)
+                clearAssignButtons()
+                assignLabel.setText(
+                    "Cleared the shortcut for '%s'." % commandText(cmd))
+
+            btnClear.clicked.connect(doClear)
+            assignBtnLayout.addWidget(btnClear)
+            assignBtnLayout.addStretch()
 
     def onCapture(seq_str):
         command = armed["command"]
