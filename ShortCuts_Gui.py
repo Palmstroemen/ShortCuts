@@ -720,15 +720,9 @@ def preferences():
 
     def applyAssignments(cmdmap):
         wbname = targetWorkbench()
-        try:
-            database("User", wbname, commands=cmdmap)
-            update(wbname)
-            updateTable(wbSelector, table, keyboard)
-        except Exception:
-            import traceback
-            App.Console.PrintError(
-                "[ShortCuts] applyAssignments failed:\n%s\n"
-                % traceback.format_exc())
+        database("User", wbname, commands=cmdmap)
+        update(wbname)
+        updateTable(wbSelector, table, keyboard)
 
     def disarm():
         armed["command"] = None
@@ -759,7 +753,6 @@ def preferences():
         clearAssignButtons()
         assignLabel.setText(
             "Press a key combination for '%s' (Esc to cancel)." % commandText(name))
-        App.Console.PrintMessage("[ShortCuts] armed: %s\n" % name)
         current = actions[name].shortcut().toString() if name in actions else ""
         if current:
             btnClear = QtGui.QPushButton("Clear %s" % current)
@@ -786,20 +779,13 @@ def preferences():
         """
         norm = normalize(seq_str)
         if not norm:
-            App.Console.PrintMessage("[ShortCuts] normalize empty, abort\n")
             return
         holders = [n for n in scopeNames()
                    if n != command
                    and normalize(actions[n].shortcut().toString()) == norm]
-        App.Console.PrintMessage(
-            "[ShortCuts] norm=%s holders=%s\n" % (norm, holders))
         if not holders:
             table._marked.discard(command)
             applyAssignments({command: norm})
-            App.Console.PrintMessage(
-                "[ShortCuts] applied -> %s now %r\n"
-                % (command, actions[command].shortcut().toString()
-                   if command in actions else "?"))
             armed["command"] = None
             keyboard.set_armed(False)
             clearAssignButtons()
@@ -838,8 +824,6 @@ def preferences():
 
     def onCapture(seq_str):
         command = armed["command"]
-        App.Console.PrintMessage(
-            "[ShortCuts] capture: seq=%r command=%s\n" % (seq_str, command))
         if command is None:
             return
         if seq_str is None:            # Esc cancelled
@@ -848,8 +832,6 @@ def preferences():
         assignShortcut(command, seq_str)
 
     def onDrop(command, seq_str):
-        App.Console.PrintMessage(
-            "[ShortCuts] drop: cmd=%s seq=%r\n" % (command, seq_str))
         if command in actions:
             assignShortcut(command, seq_str)
 
