@@ -595,6 +595,13 @@ class KeyboardLayout(QtWidgets.QWidget):
             for item in items:
                 place(targets, item)
             return "mods", targets, None
+        # Overview: the direct (plain, no-modifier) shortcuts are always filled,
+        # since no modifier key can focus them; the pips still show the rest.
+        if self.model:
+            targets = {}
+            for item in self.model["by_modset"].get(frozenset(), []):
+                place(targets, item)
+            return "overview", targets, None
         return "overview", {}, None
 
     def _style_key(self, button, ref, label, bw, bh, mode, targets, _fe,
@@ -626,15 +633,36 @@ class KeyboardLayout(QtWidgets.QWidget):
 
         if mode == "overview":
             if rec:
-                # Workbench shortcuts get their family colour; a family used only
-                # by a global shortcut gets the grey "occupied" pip.
+                # The direct (plain) shortcut fills the key - there is no plain
+                # modifier to focus it with - while the pips keep showing the
+                # modifier families that also live on this key.
+                if ref in targets:
+                    entry, is_global = targets[ref]
+                    self._fill(button, Shortcut_Model.FAMILY_COLORS["plain"])
+                    if not is_global:
+                        button.setProperty("kbcommand", entry.get("command"))
+                    icon = entry.get("icon")
+                    if icon is not None and not icon.isNull():
+                        button.setText("")
+                        button.setIcon(icon)
+                        button.setIconSize(
+                            QtCore.QSize(self.icon_px, self.icon_px))
+                        self._add_key_cap(button, label, bw, bh, "white")
+                    button.setToolTip(entry.get("text", ""))
+                # Workbench shortcuts get their family colour pip; a family used
+                # only by a global shortcut gets the grey "occupied" pip. "plain"
+                # is shown as the fill above, so it is skipped here.
                 grey = rec["families_global"] - rec["families"]
                 for family in rec["families"]:
+                    if family == "plain":
+                        continue
                     corner = _CORNER.get(family)
                     if corner:
                         self._add_pip(button, corner, bw, bh,
                                       Shortcut_Model.FAMILY_COLORS[family])
                 for family in grey:
+                    if family == "plain":
+                        continue
                     corner = _CORNER.get(family)
                     if corner:
                         self._add_pip(button, corner, bw, bh,
@@ -650,15 +678,15 @@ class KeyboardLayout(QtWidgets.QWidget):
 
         if ref in targets:
             entry, is_global = targets[ref]
-            if is_global:
-                self._fill(button, Shortcut_Model.FAMILY_COLORS["global"],
-                           text="#555555")
-            else:
-                color = (Shortcut_Model.FAMILY_COLORS["seq"] if mode == "prefix"
-                         else self._mods_color())
-                self._fill(button, color)
-                # This key holds a (non-global) shortcut in the focused layer,
-                # so it can be dragged onto another key to move it.
+            # In a focused layer every shortcut on the key wears the modifier
+            # colour - globals included, so the layer reads as one colour (the
+            # greyed "occupied" hint stays in the overview pips).
+            color = (Shortcut_Model.FAMILY_COLORS["seq"] if mode == "prefix"
+                     else self._mods_color())
+            self._fill(button, color)
+            if not is_global:
+                # A workbench's own shortcut can be dragged onto another key to
+                # move it; a global stays put.
                 button.setProperty("kbcommand", entry.get("command"))
             icon = entry.get("icon")
             if icon is not None and not icon.isNull():
@@ -667,8 +695,7 @@ class KeyboardLayout(QtWidgets.QWidget):
                 button.setIconSize(QtCore.QSize(self.icon_px, self.icon_px))
                 # The icon hides the cap, so echo the key letter small in the
                 # bottom-right corner - which physical key this is still reads.
-                self._add_key_cap(button, label, bw, bh,
-                                  "#555555" if is_global else "white")
+                self._add_key_cap(button, label, bw, bh, "white")
             button.setToolTip(entry.get("text", ""))
             return
 
