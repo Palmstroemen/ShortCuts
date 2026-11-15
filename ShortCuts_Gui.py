@@ -153,6 +153,22 @@ def _escapeHtml(text):
             .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
+def cleanCommandText(text, shortcut):
+    """Drop a leading number that just repeats the shortcut.
+
+    FreeCAD's numbered standard views carry their accelerator digit in the
+    menu text itself ("1 Front view"), so the list would otherwise read
+    "[1] 1 Front view". When the text begins with the bare single-digit
+    shortcut followed by a space, strip that prefix.
+    """
+    text = text or ""
+    if shortcut and len(shortcut) == 1 and shortcut.isdigit():
+        prefix = shortcut + " "
+        if text.startswith(prefix):
+            return text[len(prefix):].lstrip()
+    return text
+
+
 def _cheatSheetHtml(title, img_uri, img_w, rows, fs):
     """Build the cheat sheet document: a title, the keyboard image, and the
     shortcut list laid out in two columns of (shortcut, command) pairs.
@@ -590,9 +606,8 @@ def updateTable(wbSelector, table, keyboard=None):
     for i in actions:
         if not _in_list(i):
             continue
-        text = actions[i].text()
-        text = text.replace("&", "")
         shortcut = actions[i].shortcut().toString()
+        text = cleanCommandText(actions[i].text().replace("&", ""), shortcut)
         if shortcut:
             row += 1
         actionList.append([text, actions[i].objectName(), shortcut])
@@ -615,7 +630,7 @@ def updateTable(wbSelector, table, keyboard=None):
                 continue
             ic = actions[i].icon()
             kb_entries.append({
-                "text": actions[i].text().replace("&", ""),
+                "text": cleanCommandText(actions[i].text().replace("&", ""), sc),
                 "shortcut": sc,
                 "icon": ic if (ic and not ic.isNull()) else None,
                 "global": is_global,
