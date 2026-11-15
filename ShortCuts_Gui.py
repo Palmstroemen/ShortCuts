@@ -135,7 +135,7 @@ def applyShortcuts():
 
 
 def printShortcuts():
-    """Print active shortcuts to the report view"""
+    """Fallback: dump the active shortcuts to the report view as plain text."""
     for a in mw.findChildren(QtGui.QAction):
         if a.shortcut().toString():
             if a.text():
@@ -146,6 +146,132 @@ def printShortcuts():
                                      "\t" +
                                      a.shortcut().toString() +
                                      "\n")
+
+
+def _escapeHtml(text):
+    return ((text or "")
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def _cheatSheetHtml(title, img_uri, img_w, rows, fs):
+    """Build the cheat sheet document: a title, the keyboard image, and the
+    shortcut list laid out in two columns of (shortcut, command) pairs.
+
+    fs is the base font size in device pixels. The document is printed with its
+    page size set to the page's device-pixel size, so sizing fonts and the image
+    in those same pixels keeps text, image and page all at one scale (points
+    would otherwise render tiny next to the full-width keyboard image).
+    """
+    cells = []
+    for name, shortcut in rows:
+        cells.append("<td class='sc'>%s</td><td class='cmd'>%s</td>"
+                     % (_escapeHtml(shortcut), _escapeHtml(name)))
+    lines = []
+    for i in range(0, len(cells), 2):
+        pair = cells[i:i + 2]
+        if len(pair) == 1:
+            pair.append("<td></td><td></td>")
+        lines.append("<tr>%s</tr>" % "".join(pair))
+    table = ("<table class='list' align='center' cellspacing='0'"
+             " cellpadding='%d'>%s</table>"
+             % (max(2, fs // 3), "".join(lines))) \
+        if rows else "<p align='center'>No shortcuts assigned.</p>"
+    img = "<p align='center'>%s</p>" % (
+        "<img src='%s' width='%d'>" % (img_uri, img_w)) if img_uri else ""
+    heading = ("Shortcuts " + title).strip() if title else "Shortcuts"
+    return (
+        "<html><head><style>"
+        "body { font-family: sans-serif; font-size: %dpx; }"
+        "table.list { width: 85%%; }"
+        "table.list td { border-bottom: 1px solid #dddddd; padding: %dpx %dpx; }"
+        "td.sc { font-weight: bold; white-space: nowrap; }"
+        "</style></head><body>"
+        "<p align='center' style='font-size: %dpx; font-weight: bold;"
+        " margin: 0 0 %dpx 0;'>%s</p>"
+        "%s%s"
+        "</body></html>"
+    ) % (fs,
+         max(1, fs // 4), fs // 2,
+         int(fs * 1.9), fs // 2,
+         _escapeHtml(heading), img, table)
+
+
+def showCheatSheet(keyboard, title):
+    """Build a printable cheat sheet (keyboard image + shortcut list) and open a
+    print preview, from which the user can print or save it as a PDF.
+
+    Falls back to the plain report-view dump if Qt's print support is missing.
+    """
+    try:
+        from PySide import QtPrintSupport
+    except Exception:
+        try:
+            from PySide6 import QtPrintSupport
+        except Exception:
+            printShortcuts()
+            return
+
+    rows = keyboard.cheat_entries() if hasattr(keyboard, "cheat_entries") else []
+
+    # Mirror a focused modifier layer in the heading (the image reflects it too).
+    try:
+        layer = keyboard.active_layer_label()
+    except Exception:
+        layer = ""
+    if layer:
+        title = "%s — %s" % (title, layer)
+
+    printer = QtPrintSupport.QPrinter(QtPrintSupport.QPrinter.HighResolution)
+    try:
+        printer.setPageOrientation(QtGui.QPageLayout.Landscape)
+    except Exception:
+        pass
+
+    img_uri = ""
+    try:
+        pixmap = keyboard.board_pixmap()
+        if pixmap is not None and not pixmap.isNull():
+            ba = QtCore.QByteArray()
+            buf = QtCore.QBuffer(ba)
+            buf.open(QtCore.QIODevice.WriteOnly)
+            pixmap.save(buf, "PNG")
+            buf.close()
+            img_uri = ("data:image/png;base64,"
+                       + bytes(ba.toBase64()).decode("ascii"))
+    except Exception:
+        img_uri = ""
+
+    doc = QtGui.QTextDocument()
+
+    def _pageWidth(pr):
+        """Printable width in device pixels, with a safe fallback."""
+        try:
+            return int(pr.pageRect(QtPrintSupport.QPrinter.DevicePixel).width())
+        except Exception:
+            try:
+                return int(pr.pageRect().width())
+            except Exception:
+                return 4000
+
+    def _render(pr):
+        # Lay the document out in the page's own device pixels: give it that page
+        # size and size the image to match, so image, text and page all share one
+        # scale. (Sizing the image without setting the page size blows it up.)
+        try:
+            page_rect = pr.pageRect(QtPrintSupport.QPrinter.DevicePixel)
+            doc.setPageSize(QtCore.QSizeF(page_rect.size()))
+        except Exception:
+            pass
+        page_w = _pageWidth(pr)
+        img_w = max(600, int(page_w * 0.85))
+        fs = max(16, page_w // 78)   # base font in device px, scaled to the page
+        doc.setHtml(_cheatSheetHtml(title, img_uri, img_w, rows, fs))
+        doc.print_(pr)
+
+    preview = QtPrintSupport.QPrintPreviewDialog(printer, mw)
+    preview.setWindowTitle("Shortcuts cheat sheet")
+    preview.paintRequested.connect(_render)
+    preview.exec()
 
 
 def updateDict(source, wb, userLG):
@@ -613,10 +739,10 @@ def preferences():
 
     # Button print
     btnPrint = QtGui.QPushButton("Print")
-    btnPrint.setToolTip("Print active shortcuts to the report view")
-    btnPrint.clicked.connect(printShortcuts)
+    btnPrint.setToolTip("Build a printable cheat sheet of these shortcuts")
 
     # btnPrint / btnClose are placed in the right column's header row (see Layout).
+    # btnPrint is wired once the keyboard exists (it supplies the cheat sheet).
 
     # wbSelector
     wbSelector = wbSelectorWidget()
@@ -634,6 +760,18 @@ def preferences():
 
     # Keyboard view (created early so the selection handlers can feed it).
     keyboard = kb.KeyboardLayout()
+
+    # Print builds a cheat sheet from the keyboard, titled with the currently
+    # selected workbench (currentItem is reliable even when selectedItems is not).
+    def onPrint():
+        item = wbSelector.currentItem()
+        if item is None:
+            picked = wbSelector.selectedItems()
+            item = picked[0] if picked else None
+        title = item.text() if item is not None else "FreeCAD"
+        showCheatSheet(keyboard, title)
+
+    btnPrint.clicked.connect(onPrint)
 
     # Functions and connections
     def onCurrentWBchanged():

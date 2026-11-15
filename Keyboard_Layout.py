@@ -435,6 +435,39 @@ class KeyboardLayout(QtWidgets.QWidget):
         self.active_prefix = None   # refs may have changed; keep modifier focus
         self._rebuild()
 
+    # --- cheat sheet -------------------------------------------------------
+
+    def board_pixmap(self):
+        """Grab the keyboard board exactly as shown, for the cheat sheet.
+
+        It mirrors the live widget: the overview with its family-coloured pips
+        and legend, or - when a modifier/prefix layer is focused - that layer, so
+        the printout reflects whatever the user is looking at.
+        """
+        QtWidgets.QApplication.processEvents()
+        return self.board.grab()
+
+    def active_layer_label(self):
+        """A short name for the focused layer (e.g. "Shift", "Ctrl + Shift"), or
+        "" in overview - used to annotate the cheat sheet heading."""
+        if self.active_mods:
+            names = {"ctrl": "Ctrl", "shift": "Shift",
+                     "alt": "Alt", "meta": "Meta"}
+            return " + ".join(names.get(f, f.title())
+                              for f in Shortcut_Model.FAMILY_ORDER
+                              if f in self.active_mods)
+        return ""
+
+    def cheat_entries(self):
+        """(command text, shortcut string) for every overlaid shortcut, sorted.
+
+        Drives the readable list under the keyboard image on the cheat sheet.
+        """
+        rows = [(e.get("text", ""), e.get("shortcut", ""))
+                for e in self.entries if e.get("shortcut")]
+        rows.sort(key=lambda r: r[0].lower())
+        return rows
+
     # --- selection helpers -------------------------------------------------
 
     def _selected_layout(self):
@@ -632,6 +665,10 @@ class KeyboardLayout(QtWidgets.QWidget):
                 button.setText("")
                 button.setIcon(icon)
                 button.setIconSize(QtCore.QSize(self.icon_px, self.icon_px))
+                # The icon hides the cap, so echo the key letter small in the
+                # bottom-right corner - which physical key this is still reads.
+                self._add_key_cap(button, label, bw, bh,
+                                  "#555555" if is_global else "white")
             button.setToolTip(entry.get("text", ""))
             return
 
@@ -733,6 +770,25 @@ class KeyboardLayout(QtWidgets.QWidget):
         y = 2 if corner in ("tl", "tr") else bh - size - 2
         pip.move(x, y)
         pip.show()
+
+    def _add_key_cap(self, button, label, bw, bh, color):
+        """A small key-cap letter in the bottom-right corner of a key.
+
+        A focused key wears its command icon instead of its letter; this puts the
+        letter back, small and out of the way, so the key stays identifiable.
+        """
+        if not label:
+            return
+        cap = QtWidgets.QLabel(label, button)
+        cap.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        cap.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignBottom)
+        pt = max(6, int(round(6 * self.cell / CELL)))
+        cap.setStyleSheet(
+            "QLabel{color:%s;font-size:%dpt;background:transparent;}"
+            % (color, pt))
+        cap.adjustSize()
+        cap.move(max(0, bw - cap.width() - 2), max(0, bh - cap.height()))
+        cap.show()
 
     def _add_prefix_dot(self, button, bw, bh):
         # A translucent purple tint laid over the cap marks a key that starts a
