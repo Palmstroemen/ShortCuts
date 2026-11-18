@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+  <name>ShortCuts</name>
+  <description>
+    Manage, visualise and learn FreeCAD keyboard shortcuts. ShortCuts adds a
+    searchable list of commands with their shortcuts per workbench, a keyboard
+    view that shows the shortcuts laid out on the physical keyboard (with a
+    modifier overlay for Ctrl/Shift/Alt layers), drag-and-drop assignment of
+    shortcuts directly on the keyboard, and a printable cheat sheet. It also
+    keeps the original Shift+Q command overlay.
+  </description>
+  <version>1.0.0</version>
+  <date>2026-11-18</date>
+  <maintainer email="palmstroem177@gmail.com">Palmstroemen</maintainer>
+  <license file="License/lgpl-2.1.txt">LGPL-2.1-or-later</license>
+  <url type="repository" branch="master">https://github.com/Palmstroemen/ShortCuts.git</url>
+  <url type="readme">https://raw.githubusercontent.com/Palmstroemen/ShortCuts/master/README.md</url>
+  <url type="bugtracker">https://github.com/Palmstroemen/ShortCuts/issues</url>
+  <icon>Resources/icons/ShortCuts.svg</icon>
+  <author>triplus</author>
+</package>

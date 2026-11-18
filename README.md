@@ -1,30 +1,58 @@
 # ShortCuts
-Shortcuts manager and overlay for FreeCAD.
-This fork tries to improve the existing AddOn.
-- replace the dropdown for workbench selection by a list of workbenches
-- allow to show just assigned shortcuts in the list and not all (mostly empty items)
-- add a keyboard-view as alternative to the list view.
-- add a shortcut-trainer that somehow helps users to learn shortcuts easily.
 
-### Installation:
+Manage, visualise and learn FreeCAD keyboard shortcuts.
 
-Install path for FreeCAD modules depends on the operating system used.
+This is a maintained fork of the original *ShortCuts* add-on by triplus, kept
+working on current FreeCAD (1.x, Qt6) and extended with a keyboard view, direct
+assignment and a printable cheat sheet.
 
-##### Examples:
+![Keyboard view](Resources/icons/ShortCuts.svg)
 
-Linux:
+## Features
 
-`/home/user/.FreeCAD/Mod/ShortCuts/InitGui.py`
+- **Command list per workbench** — pick a workbench from the list (or
+  *All workbenches* / *Global shortcuts*) and see its commands with their
+  shortcuts. Filter to show all commands, only the ones that have a shortcut,
+  or only the empty ones. A search box narrows the list.
+- **Keyboard view** — the shortcuts drawn on the physical keyboard, laid out
+  for the active keyboard layout. An overview marks each key with coloured
+  corner pips per modifier family (Ctrl / Shift / Alt), fills the direct
+  (no-modifier) shortcuts, and greys always-active global shortcuts. Click a
+  modifier key — or press a real Ctrl / Shift / Alt — to focus that layer and
+  see just those shortcuts with their command icons. Keys that start a
+  two-step sequence (e.g. `G, S`) are marked too.
+- **Assign shortcuts on the keyboard** — drag a command onto a key, or arm a
+  command and press a key combination, to (re)assign its shortcut. Conflicts
+  with an existing workbench or global shortcut are shown so you can decide
+  which one to keep.
+- **Printable cheat sheet** — the *Print* button opens a print preview with the
+  current keyboard view and a formatted, paginated shortcut list for the
+  selected workbench, ready to print or save as PDF.
+- **Command overlay** — the original quick overlay: press **Shift+Q** to pop up
+  the configured commands near the cursor.
 
-macOS:
+## Installation
 
-`/Users/user_name/Library/Preferences/FreeCAD/Mod/ShortCuts/InitGui.py`
+### Addon Manager (recommended)
 
-Windows:
+Once published, install *ShortCuts* from FreeCAD's **Tools → Addon manager**.
 
-`C:\Users\user_name\AppData\Roaming\FreeCAD\Mod\ShortCuts\InitGui.py`
+### Manual
 
+Clone or copy this repository into your FreeCAD `Mod` directory, so that
+`InitGui.py` sits at `.../Mod/ShortCuts/InitGui.py`:
 
-### Usage:
+- Linux: `~/.local/share/FreeCAD/Mod/ShortCuts/`
+- macOS: `~/Library/Application Support/FreeCAD/Mod/ShortCuts/`
+- Windows: `%APPDATA%\FreeCAD\Mod\ShortCuts\`
 
-Shortcuts manager preferences are located under Accessories -> Shortcuts. To invoke shortcuts overlay feature press the Shift+Q key combination on the keyboard.
+Restart FreeCAD afterwards.
+
+## Usage
+
+Open the manager from **Tools → Accessories → Shortcuts Manager**. To invoke the
+quick command overlay, press **Shift+Q**.
+
+## License
+
+LGPL-2.1-or-later. See [License/lgpl-2.1.txt](License/lgpl-2.1.txt).
