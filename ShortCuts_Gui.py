@@ -1059,12 +1059,12 @@ def onPreferences():
 def accessoriesMenu():
     """Add ShortCuts preferences to accessories menu."""
     pref = QtGui.QAction(mw)
-    pref.setText("ShortcutsDeveloper")
-    pref.setObjectName("ShortCutsDeveloper")
+    pref.setText("Shortcuts Manager")
+    pref.setObjectName("ShortCutsManager")
     pref.triggered.connect(onPreferences)
     try:
         import AccessoriesMenu
-        AccessoriesMenu.addItem("ShortCutsDeveloper")
+        AccessoriesMenu.addItem("ShortCutsManager")
     except ImportError:
         a = mw.findChild(QtGui.QAction, "AccessoriesMenu")
         if a:
